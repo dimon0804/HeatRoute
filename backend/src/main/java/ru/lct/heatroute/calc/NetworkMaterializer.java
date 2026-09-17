@@ -163,7 +163,7 @@ public class NetworkMaterializer {
             RunState run = initialRun(flows.get(child), overCapacity, tree, child);
             rootDn = Math.max(rootDn, run.getDn());
             OpenSegment open = newOpen(rootNodeId,
-                    graph.node(tree.getRoot()).getLocation(), flows.get(child));
+                    tree.locationOf(graph, tree.getRoot()), flows.get(child));
             descend(tree, graph, field, child, open, run, flows, nodeIds, ids, variantId,
                     segments, technicalNodes, overCapacity, chamberAdjacent);
         }
@@ -181,7 +181,7 @@ public class NetworkMaterializer {
             chambers.add(NewChamberResult.builder()
                     .id(chamberId)
                     .variantId(variantId)
-                    .location(Geo.point(graph.node(node).getLocation()))
+                    .location(Geo.point(tree.locationOf(graph, node)))
                     .diameter(maxDn)
                     .degree(tree.degree(node))
                     .cost(catalog.chamberCost(maxDn))
@@ -212,8 +212,8 @@ public class NetworkMaterializer {
                          List<String> overCapacity,
                          Map<String, Set<Integer>> chamberAdjacent) {
         int parent = tree.getParent().get(node);
-        Coordinate from = graph.node(parent).getLocation();
-        Coordinate to = graph.node(node).getLocation();
+        Coordinate from = tree.locationOf(graph, parent);
+        Coordinate to = tree.locationOf(graph, node);
         double flow = flows.getOrDefault(node, 0d);
 
         RunState afterEdge = emitEdge(field, from, to, flow, run, open, ids, variantId,

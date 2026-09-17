@@ -60,6 +60,8 @@ public class VariantPlanner {
     private final NetworkMaterializer materializer;
     private final ReconstructionCalculator reconstruction;
     private final CostCalculator costCalculator;
+    private final VariantRenumberer renumberer;
+    private final CrossingRepair crossingRepair;
 
     public VariantPlanner(ReferenceCatalog catalog,
                           GeoProperties geoProps,
@@ -68,7 +70,9 @@ public class VariantPlanner {
                           SteinerTreeBuilder treeBuilder,
                           NetworkMaterializer materializer,
                           ReconstructionCalculator reconstruction,
-                          CostCalculator costCalculator) {
+                          CostCalculator costCalculator,
+                          VariantRenumberer renumberer,
+                          CrossingRepair crossingRepair) {
         this.catalog = catalog;
         this.geoProps = geoProps;
         this.routingProps = routingProps;
@@ -77,6 +81,8 @@ public class VariantPlanner {
         this.materializer = materializer;
         this.reconstruction = reconstruction;
         this.costCalculator = costCalculator;
+        this.renumberer = renumberer;
+        this.crossingRepair = crossingRepair;
     }
 
     /** Побочные данные расчёта, нужные интерфейсу и отчётам. */
@@ -220,13 +226,24 @@ public class VariantPlanner {
             for (TieInCandidate candidate : candidates) {
                 GroupResult result = buildGroup(scene, graph, field, candidate, group,
                         variantId, terminalNodeIds, oksById, ids,
-                        consumedAtNode.getOrDefault(candidate.getGraphNodeIndex(), 0));
+                        consumedAtNode.getOrDefault(candidate.getGraphNodeIndex(), 0),
+                        segments);
                 if (result == null) {
                     continue;
                 }
-                if (best == null || result.getScore() < best.getScore()) {
+                if (best == null || betterThan(result, best)) {
                     best = result;
                 }
+            }
+            if (best != null && best.getCrossingsWithAccepted() > 0) {
+                // Независимые части сети объединить нельзя: у каждой своя точка врезки,
+                // и объединение дало бы два пути до одного ОКС вопреки разделу 2.2 ТЗ.
+                // Раз ни одна точка врезки не даёт части без пересечений, это разбиение
+                // ОКС непригодно целиком. Разбиение «все одной сетью» пересечений между
+                // частями не имеет по построению, поэтому хотя бы один вариант останется.
+                log.debug("Разбиение отброшено: часть сети пересекает уже принятые "
+                        + "участки при любой точке врезки (вариант {})", variantId);
+                return null;
             }
             if (best == null) {
                 group.forEach(t -> unconnected.add(t.getOksId()));
@@ -246,6 +263,17 @@ public class VariantPlanner {
         if (segments.isEmpty()) {
             return null;
         }
+
+        // Перебор кандидатов врезки расходует идентификаторы, поэтому итоговые объекты
+        // нумеруются заново — уже после того, как состав варианта окончательно известен.
+        VariantRenumberer.Renumbered renumbered =
+                renumberer.renumber(variantId, segments, chambers, nodes, tieIns);
+        segments = renumbered.getSegments();
+        chambers = renumbered.getChambers();
+        nodes = renumbered.getTechnicalNodes();
+        tieIns = renumbered.getTieIns();
+        chamberMaxDn = renumberer.remapChamberDiameters(
+                chamberMaxDn, renumbered.getNodeIdMapping());
 
         ReconstructionCalculator.Result recon =
                 reconstruction.compute(scene, tieIns, chamberMaxDn, variantId);
@@ -272,6 +300,25 @@ public class VariantPlanner {
                 .build();
     }
 
+    /**
+     * Порядок предпочтения кандидатов: сначала подключить все ОКС, затем не нарушать
+     * запрет пересечений, и только потом — дешевле.
+     * <p>
+     * Порядок именно такой, потому что цена ошибок разная. Неподключенный ОКС стоит
+     * не менее 100 млн руб. штрафа (раздел 8.3 ТП) и прямо ухудшает решение задачи.
+     * Пересечение трасс — нарушение правила, но его можно обойти другим разбиением
+     * ОКС; жертвовать ради него подключением объекта нельзя.
+     */
+    private boolean betterThan(GroupResult candidate, GroupResult current) {
+        if (candidate.getUnconnected().size() != current.getUnconnected().size()) {
+            return candidate.getUnconnected().size() < current.getUnconnected().size();
+        }
+        if (candidate.getCrossingsWithAccepted() != current.getCrossingsWithAccepted()) {
+            return candidate.getCrossingsWithAccepted() < current.getCrossingsWithAccepted();
+        }
+        return candidate.getScore() < current.getScore();
+    }
+
     /** Результат построения одной независимой части сети. */
     @Value
     private static class GroupResult {
@@ -286,6 +333,13 @@ public class VariantPlanner {
         int rootGraphNode;
         /** Сколько участков новой сети приведено в этот узел. */
         int rootBranches;
+        /**
+         * Сколько участков этой части пересекает уже принятые части сети.
+         * Раздел 2.3 ТЗ запрещает пересечения вне общего узла, а объединить
+         * независимые части нельзя: у каждой своя точка врезки, и объединение
+         * дало бы два пути до одного ОКС.
+         */
+        int crossingsWithAccepted;
     }
 
     private GroupResult buildGroup(InputScene scene,
@@ -297,7 +351,8 @@ public class VariantPlanner {
                                    Map<String, String> terminalNodeIds,
                                    Map<String, FutureOks> oksById,
                                    NetworkMaterializer.IdSequence ids,
-                                   int alreadyConsumedAtNode) {
+                                   int alreadyConsumedAtNode,
+                                   List<NewSegment> acceptedSegments) {
         // Раздел 3 ТП: к камере примыкает не более четырёх участков. В точке врезки
         // часть мест уже занята: существующей камере — её текущими примыканиями,
         // новой камере на участке — двумя половинами разрезанного участка.
@@ -318,10 +373,17 @@ public class VariantPlanner {
 
         int designDn = catalog.selectForFlow(built.getTree().totalFlow())
                 .map(DiameterRow::getDn).orElse(catalog.largest().getDn());
-        built.getTree().straighten(graph, routingProps.getMinTurnAngleDeg(),
-                (a, b) -> field.isPassable(graph.node(a).getLocation(),
-                        graph.node(b).getLocation(), designDn,
-                        graph.node(b).getTerminalOksId()));
+
+        RouteTree tree = built.getTree();
+        java.util.function.BiPredicate<Integer, Integer> passable = (a, b) -> field.isPassable(
+                tree.locationOf(graph, a), tree.locationOf(graph, b), designDn,
+                tree.isSynthetic(b) ? null : graph.node(b).getTerminalOksId());
+
+        // Раздел 2.3 ТЗ: пересекающиеся маршруты объединяются в общую сеть.
+        // Выполняется до спрямления: объединение убирает лишние звенья, и спрямлять
+        // потом есть смысл, а наоборот — нет.
+        crossingRepair.repair(tree, graph, passable);
+        tree.straighten(graph, routingProps.getMinTurnAngleDeg(), passable);
 
         // Врезка в существующую камеру не требует новой камеры; иначе камера строится
         // в точке врезки (раздел 8.2 ТП).
@@ -377,7 +439,24 @@ public class VariantPlanner {
         return new GroupResult(m.getSegments(), chambers, m.getTechnicalNodes(), tieIn,
                 unconnected, chamberMaxDn, partial.getScore(),
                 candidate.getGraphNodeIndex(),
-                built.getTree().childrenOf(candidate.getGraphNodeIndex()).size());
+                built.getTree().childrenOf(candidate.getGraphNodeIndex()).size(),
+                countCrossings(m.getSegments(), acceptedSegments));
+    }
+
+    /** Сколько участков новой части пересекает уже принятые участки варианта. */
+    private int countCrossings(List<NewSegment> fresh, List<NewSegment> accepted) {
+        if (accepted.isEmpty()) {
+            return 0;
+        }
+        int count = 0;
+        for (NewSegment a : fresh) {
+            for (NewSegment b : accepted) {
+                if (a.getGeometry().intersects(b.getGeometry())) {
+                    count++;
+                }
+            }
+        }
+        return count;
     }
 
     private String describe(List<List<SteinerTreeBuilder.Terminal>> partition,

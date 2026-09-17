@@ -43,6 +43,14 @@ public class RouteTree {
     /** ID перспективного ОКС по узлу-терминалу. */
     private final Map<Integer, String> terminalOks = new LinkedHashMap<>();
 
+    /**
+     * Узлы, которых нет в графе маршрутизации: они появляются при устранении
+     * самопересечений трассы, в точке пересечения двух ветвей. Индексы выдаются
+     * за пределами диапазона графа, поэтому спутать их с настоящими нельзя.
+     */
+    private final Map<Integer, Coordinate> syntheticNodes = new LinkedHashMap<>();
+    private int nextSyntheticIndex = Integer.MAX_VALUE / 2;
+
     public RouteTree(int root) {
         this.root = root;
         children.put(root, new ArrayList<>());
@@ -145,10 +153,62 @@ public class RouteTree {
     public double totalLength(RoutingGraph graph) {
         double sum = 0;
         for (Map.Entry<Integer, Integer> e : parent.entrySet()) {
-            sum += graph.node(e.getKey()).getLocation()
-                    .distance(graph.node(e.getValue()).getLocation());
+            sum += locationOf(graph, e.getKey()).distance(locationOf(graph, e.getValue()));
         }
         return sum;
+    }
+
+    /** Добавляет узел с заданными координатами, которого нет в графе. */
+    public int addSyntheticNode(Coordinate location) {
+        int index = nextSyntheticIndex++;
+        syntheticNodes.put(index, new Coordinate(location.x, location.y));
+        children.put(index, new ArrayList<>());
+        return index;
+    }
+
+    public boolean isSynthetic(int node) {
+        return syntheticNodes.containsKey(node);
+    }
+
+    /** Координаты узла независимо от того, из графа он или добавлен при правке трассы. */
+    public Coordinate locationOf(RoutingGraph graph, int node) {
+        Coordinate synthetic = syntheticNodes.get(node);
+        return synthetic != null ? synthetic : graph.node(node).getLocation();
+    }
+
+    /** Переподчиняет узел другому родителю. Используется при устранении пересечений. */
+    public void reparent(int node, int newParent) {
+        Integer oldParent = parent.get(node);
+        if (oldParent != null) {
+            children.getOrDefault(oldParent, new ArrayList<>()).remove((Integer) node);
+        }
+        parent.put(node, newParent);
+        children.computeIfAbsent(newParent, k -> new ArrayList<>()).add(node);
+        children.computeIfAbsent(node, k -> new ArrayList<>());
+    }
+
+    /** Является ли {@code candidate} потомком {@code ancestor} (или им самим). */
+    public boolean isDescendant(int candidate, int ancestor) {
+        int current = candidate;
+        int guard = 0;
+        while (guard++ < 100_000) {
+            if (current == ancestor) {
+                return true;
+            }
+            Integer up = parent.get(current);
+            if (up == null) {
+                return false;
+            }
+            current = up;
+        }
+        return false;
+    }
+
+    /** Все рёбра дерева в виде пар «родитель — потомок». */
+    public List<int[]> edges() {
+        List<int[]> out = new ArrayList<>(parent.size());
+        parent.forEach((child, p) -> out.add(new int[]{p, child}));
+        return out;
     }
 
     public List<String> connectedOks() {
@@ -186,9 +246,9 @@ public class RouteTree {
                 }
                 int p = parent.get(node);
                 int c = kids.get(0);
-                Coordinate cp = graph.node(p).getLocation();
-                Coordinate cn = graph.node(node).getLocation();
-                Coordinate cc = graph.node(c).getLocation();
+                Coordinate cp = locationOf(graph, p);
+                Coordinate cn = locationOf(graph, node);
+                Coordinate cc = locationOf(graph, c);
 
                 double turn = 180 - angleDeg(cp, cn, cc);
                 if (turn > maxTurnDeg) {

@@ -1,0 +1,108 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  html,
+  body,
+  #root {
+    height: 100%;
+    margin: 0;
+  }
+
+  body {
+    background: #0f1720;
+    color: #e8eef5;
+    font-family: Inter, 'Segoe UI', system-ui, sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  /* Полосы прокрутки в тон интерфейсу: светлые полосы по умолчанию
+     разрезают тёмные панели пополам и сразу бросаются в глаза. */
+  ::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+  }
+
+  ::-webkit-scrollbar-track {
+    background: transparent;
+  }
+
+  ::-webkit-scrollbar-thumb {
+    background: #233040;
+    border-radius: 4px;
+  }
+
+  ::-webkit-scrollbar-thumb:hover {
+    background: #2e3f53;
+  }
+}
+
+/* Карточка объекта на карте. Стили здесь, а не в компоненте: содержимое
+   всплывающего окна MapLibre вставляется как разметка и классы Tailwind
+   в нём не обрабатываются сборщиком. */
+.hr-popup .maplibregl-popup-content {
+  background: #151d28;
+  border: 1px solid #233040;
+  border-radius: 8px;
+  padding: 10px 12px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45);
+}
+
+.hr-popup .maplibregl-popup-tip {
+  border-top-color: #151d28;
+  border-bottom-color: #151d28;
+}
+
+.hr-popup .maplibregl-popup-close-button {
+  color: #8ea0b5;
+  font-size: 16px;
+  padding: 2px 6px;
+}
+
+.hr-title {
+  font-size: 12px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  color: #4da3ff;
+  margin-bottom: 6px;
+}
+
+.hr-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 1px 0;
+  font-size: 12px;
+}
+
+.hr-label {
+  color: #8ea0b5;
+}
+
+.hr-value {
+  color: #e8eef5;
+  font-family: 'JetBrains Mono', Consolas, monospace;
+  text-align: right;
+}
+
+/* Элементы управления MapLibre в тёмной теме. */
+.maplibregl-ctrl-group {
+  background: #151d28 !important;
+  border: 1px solid #233040 !important;
+}
+
+.maplibregl-ctrl-group button + button {
+  border-top: 1px solid #233040 !important;
+}
+
+.maplibregl-ctrl button .maplibregl-ctrl-icon {
+  filter: invert(0.8);
+}
+
+.maplibregl-ctrl-scale {
+  background: rgba(21, 29, 40, 0.8) !important;
+  border-color: #233040 !important;
+  color: #8ea0b5 !important;
+}

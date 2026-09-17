@@ -24,3 +24,9 @@ Thumbs.db
 # --- выгрузки расчёта ---
 data/output/
 data/tmp/
+
+# --- служебное ---
+frontend/shots/
+frontend/vite.log
+backend/run.log
+.playwright-mcp/
