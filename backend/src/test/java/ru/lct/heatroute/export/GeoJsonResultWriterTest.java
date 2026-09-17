@@ -69,6 +69,10 @@ class GeoJsonResultWriterTest {
         REQUIRED.put("heat_chamber_reconstruction", Set.of("id", "object_type", "variant_id",
                 "existing_object_id", "existing_diameter", "required_diameter", "cost"));
         REQUIRED.put("technical_node", Set.of("id", "object_type", "variant_id"));
+        // Сверх раздела 10 ТП: требование раздела 7 приложения по глубине.
+        REQUIRED.put("depth_crossing", Set.of("id", "object_type", "variant_id", "segment_id",
+                "utility_id", "utility_type", "passage", "new_depth", "utility_depth",
+                "required_clearance", "actual_clearance"));
         REQUIRED.put("variant_summary", Set.of("id", "object_type", "variant_id", "rank",
                 "construction_cost", "chamber_construction_cost", "tie_in_cost",
                 "reconstruction_cost", "chamber_reconstruction_cost", "unconnected_penalty",

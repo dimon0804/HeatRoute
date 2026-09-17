@@ -101,10 +101,15 @@ public class CalculationService {
     //  Исполнение
     // =================================================================================
 
-    /** Фоновое исполнение. Вызывается контроллером сразу после постановки в очередь. */
+    /**
+     * Фоновое исполнение. Вызывается контроллером сразу после постановки в очередь —
+     * именно через бин, а не изнутри службы: асинхронность в Spring работает через прокси.
+     *
+     * @param withDepth рассчитать профиль по глубине (дополнительная задача кейса)
+     */
     @Async("calculationExecutor")
     @Transactional(readOnly = true)
-    public void execute(UUID jobId) {
+    public void execute(UUID jobId, boolean withDepth) {
         CalculationJobEntity job = jobs.findById(jobId).orElse(null);
         if (job == null || job.getStatus() != JobStatus.QUEUED) {
             return;
@@ -117,7 +122,8 @@ public class CalculationService {
             state.progress(jobId, JobStatus.RUNNING, 0.03, "Исходные данные разобраны");
 
             VariantPlanner.Plan plan = planner.plan(scene,
-                    (fraction, stage) -> state.progress(jobId, JobStatus.RUNNING, fraction, stage));
+                    (fraction, stage) -> state.progress(jobId, JobStatus.RUNNING, fraction, stage),
+                    withDepth);
 
             state.saveResult(jobId, plan);
             state.complete(jobId, plan, Duration.ofNanos(System.nanoTime() - started));

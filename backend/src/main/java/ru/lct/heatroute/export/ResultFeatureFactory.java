@@ -61,6 +61,7 @@ public class ResultFeatureFactory {
         variant.getChambers().forEach(c -> consumer.accept(chamber(c)));
         variant.getChamberReconstructions().forEach(c -> consumer.accept(chamberReconstruction(c)));
         variant.getTechnicalNodes().forEach(n -> consumer.accept(technicalNode(n)));
+        variant.getDepthCrossings().forEach(c -> consumer.accept(depthCrossing(c, variant)));
         consumer.accept(summary(variant.getSummary()));
     }
 
@@ -146,6 +147,39 @@ public class ResultFeatureFactory {
         p.put("object_type", "technical_node");
         p.put("variant_id", n.getVariantId());
         return new ResultFeature("technical_node", n.getId(), toWgs(n.getLocation()), p);
+    }
+
+    /**
+     * Пересечение с существующей коммуникацией по глубине.
+     * <p>
+     * Тип выходного объекта сверх раздела 10 ТП: его требует раздел 7 приложения
+     * по глубине — «места пересечений с указанием прохождения сверху или снизу»
+     * и «расчётные вертикальные расстояния». В плоской задаче такие объекты
+     * не выгружаются вовсе.
+     */
+    public ResultFeature depthCrossing(ru.lct.heatroute.depth.UtilityCrossing c,
+                                       ru.lct.heatroute.domain.result.CalculationVariant variant) {
+        String id = "cross_" + variant.getVariantId() + "_" + c.getSegmentId()
+                + "_" + Math.round(c.getStation());
+        Map<String, Object> p = new LinkedHashMap<>();
+        p.put("id", id);
+        p.put("object_type", "depth_crossing");
+        p.put("variant_id", variant.getVariantId());
+        p.put("segment_id", c.getSegmentId());
+        p.put("utility_id", c.getUtilityId());
+        p.put("utility_type", c.getUtilityType());
+        p.put("passage", c.getPassage() == ru.lct.heatroute.depth.UtilityCrossing.Passage.ABOVE
+                ? "above" : "below");
+        p.put("new_depth", round(c.getNewDepth()));
+        p.put("utility_depth", round(c.getUtilityDepthToTop()));
+        p.put("required_clearance", round(c.getRequiredClearance()));
+        p.put("actual_clearance", round(c.getActualClearance()));
+        return new ResultFeature("depth_crossing", id,
+                toWgs(Geo.point(c.getLocation())), p);
+    }
+
+    private static double round(double v) {
+        return Math.round(v * 100d) / 100d;
     }
 
     // --- 10.7 сводная запись варианта ------------------------------------------------------

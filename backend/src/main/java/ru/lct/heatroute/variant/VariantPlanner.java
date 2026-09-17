@@ -7,6 +7,8 @@ import org.springframework.stereotype.Component;
 import ru.lct.heatroute.calc.CostCalculator;
 import ru.lct.heatroute.calc.NetworkMaterializer;
 import ru.lct.heatroute.calc.ReconstructionCalculator;
+import ru.lct.heatroute.depth.DepthPlanner;
+import ru.lct.heatroute.depth.UtilityCrossing;
 import ru.lct.heatroute.domain.model.FutureOks;
 import ru.lct.heatroute.domain.model.InputScene;
 import ru.lct.heatroute.domain.reference.ReferenceCatalog;
@@ -62,6 +64,7 @@ public class VariantPlanner {
     private final CostCalculator costCalculator;
     private final VariantRenumberer renumberer;
     private final CrossingRepair crossingRepair;
+    private final DepthPlanner depthPlanner;
 
     public VariantPlanner(ReferenceCatalog catalog,
                           GeoProperties geoProps,
@@ -72,7 +75,8 @@ public class VariantPlanner {
                           ReconstructionCalculator reconstruction,
                           CostCalculator costCalculator,
                           VariantRenumberer renumberer,
-                          CrossingRepair crossingRepair) {
+                          CrossingRepair crossingRepair,
+                          DepthPlanner depthPlanner) {
         this.catalog = catalog;
         this.geoProps = geoProps;
         this.routingProps = routingProps;
@@ -83,6 +87,7 @@ public class VariantPlanner {
         this.costCalculator = costCalculator;
         this.renumberer = renumberer;
         this.crossingRepair = crossingRepair;
+        this.depthPlanner = depthPlanner;
     }
 
     /** Побочные данные расчёта, нужные интерфейсу и отчётам. */
@@ -94,6 +99,12 @@ public class VariantPlanner {
         int graphEdges;
         int tieInCandidates;
         long millis;
+        /** Режим с учётом глубины (дополнительная задача). */
+        boolean withDepth;
+        /** Пересечения с существующими коммуникациями по глубине, по варианту. */
+        Map<String, List<UtilityCrossing>> crossingsByVariant;
+        /** Участки, для которых допустимый профиль по глубине не найден, по варианту. */
+        Map<String, List<String>> depthUnresolvedByVariant;
     }
 
     /** Обратный вызов прогресса: расчёт длится десятки секунд, интерфейсу нужен отклик. */
@@ -104,10 +115,20 @@ public class VariantPlanner {
     }
 
     public Plan plan(InputScene scene) {
-        return plan(scene, Progress.NONE);
+        return plan(scene, Progress.NONE, false);
     }
 
     public Plan plan(InputScene scene, Progress progress) {
+        return plan(scene, progress, false);
+    }
+
+    /**
+     * @param withDepth рассчитать профиль по глубине (дополнительная задача).
+     *                  Стоимость участков пересчитывается с коэффициентом по глубине,
+     *                  и ранжирование после этого может измениться: выигрывает вариант,
+     *                  у которого пересечений с коммуникациями меньше или они дешевле.
+     */
+    public Plan plan(InputScene scene, Progress progress, boolean withDepth) {
         long started = System.nanoTime();
 
         // --- 1. Расчётный диаметр клиренсов ----------------------------------------------
@@ -191,14 +212,36 @@ public class VariantPlanner {
                             variantCounter, partitions.size()));
         }
 
+        Map<String, List<UtilityCrossing>> crossings = new LinkedHashMap<>();
+        Map<String, List<String>> depthUnresolved = new LinkedHashMap<>();
+
+        if (withDepth) {
+            progress.report(0.95, "Построение профиля по глубине");
+            List<CalculationVariant> withProfile = new ArrayList<>(produced.size());
+            for (CalculationVariant variant : produced) {
+                DepthPlanner.Result depth = depthPlanner.apply(variant, scene);
+                CalculationVariant updated = depth.getVariant();
+                // Стоимость участков изменилась: пересчитываем сводку по разделу 8 ТП.
+                updated = updated.withSummary(costCalculator.summarize(
+                        updated.getVariantId(), updated.getSegments(), updated.getChambers(),
+                        updated.getTieIns(), updated.getReconstructions(),
+                        updated.getChamberReconstructions(),
+                        variant.getSummary().getUnconnectedOksIds(), oksById));
+                withProfile.add(updated);
+                crossings.put(updated.getVariantId(), depth.getCrossings());
+                depthUnresolved.put(updated.getVariantId(), depth.getUnresolved());
+            }
+            produced = withProfile;
+        }
+
         List<CalculationVariant> ranked = rank(produced);
         progress.report(0.98, "Ранжирование вариантов");
         long millis = (System.nanoTime() - started) / 1_000_000;
-        log.info("Расчёт завершён за {} мс: вариантов {}, расчётный ДУ клиренсов {} мм",
-                millis, ranked.size(), designDn);
+        log.info("Расчёт завершён за {} мс: вариантов {}, расчётный ДУ клиренсов {} мм{}",
+                millis, ranked.size(), designDn, withDepth ? ", с учётом глубины" : "");
 
         return new Plan(ranked, designDn, graph.size(), graph.edgeCount() / 2,
-                located.size(), millis);
+                located.size(), millis, withDepth, crossings, depthUnresolved);
     }
 
     // =================================================================================
