@@ -90,7 +90,18 @@ public class VariantPlanner {
         long millis;
     }
 
+    /** Обратный вызов прогресса: расчёт длится десятки секунд, интерфейсу нужен отклик. */
+    public interface Progress {
+        void report(double fraction, String stage);
+
+        Progress NONE = (f, s) -> { };
+    }
+
     public Plan plan(InputScene scene) {
+        return plan(scene, Progress.NONE);
+    }
+
+    public Plan plan(InputScene scene, Progress progress) {
         long started = System.nanoTime();
 
         // --- 1. Расчётный диаметр клиренсов ----------------------------------------------
@@ -104,9 +115,11 @@ public class VariantPlanner {
                 .map(DiameterRow::getDn).orElse(catalog.largest().getDn());
 
         ObstacleField field = new ObstacleField(scene, catalog, geoProps, routingProps);
+        progress.report(0.05, "Построение поля препятствий");
 
         // --- 2. Граф маршрутизации --------------------------------------------------------
         List<TieInCandidate> candidates = tieInFinder.find(scene);
+        progress.report(0.10, "Поиск кандидатов точек врезки");
         List<RoutingGraph.Node> extras = new ArrayList<>();
         for (FutureOks oks : scene.getFutureOks()) {
             extras.add(RoutingGraph.terminal(oks.getConnectionPoint().getCoordinate(), oks.getId()));
@@ -115,6 +128,7 @@ public class VariantPlanner {
             extras.add(RoutingGraph.tieInCandidate(c.getLocation(), c.getId()));
         }
         RoutingGraph graph = RoutingGraph.build(field, designDn, extras, routingProps);
+        progress.report(0.45, "Граф маршрутизации построен");
 
         Map<String, Integer> nodeByExternalId = new LinkedHashMap<>();
         for (RoutingGraph.Node n : graph.nodes()) {
@@ -140,6 +154,7 @@ public class VariantPlanner {
         }
 
         // --- 3. Разбиения ОКС ---------------------------------------------------------------
+        progress.report(0.50, "Кластеризация перспективных ОКС");
         List<List<List<SteinerTreeBuilder.Terminal>>> partitions =
                 new OksClustering(graph).partitions(terminals, 3);
 
@@ -153,9 +168,13 @@ public class VariantPlanner {
             if (variant != null) {
                 produced.add(variant);
             }
+            progress.report(0.50 + 0.45 * variantCounter / partitions.size(),
+                    String.format("Построение вариантов: %d из %d",
+                            variantCounter, partitions.size()));
         }
 
         List<CalculationVariant> ranked = rank(produced);
+        progress.report(0.98, "Ранжирование вариантов");
         long millis = (System.nanoTime() - started) / 1_000_000;
         log.info("Расчёт завершён за {} мс: вариантов {}, расчётный ДУ клиренсов {} мм",
                 millis, ranked.size(), designDn);

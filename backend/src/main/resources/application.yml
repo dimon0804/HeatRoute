@@ -27,10 +27,12 @@ spring:
         order_inserts: true
         dialect: org.hibernate.spatial.dialect.postgis.PostgisPG95Dialect
 
-  flyway:
-    enabled: true
-    baseline-on-migrate: true
-    locations: classpath:db/migration
+  autoconfigure:
+    # Автоконфигурация Flyway в Spring Boot 2.6.3 рассчитана на Flyway 8.x и падает
+    # на 9.x. Миграции настроены вручную в ru.lct.heatroute.config.FlywayConfig,
+    # что позволяет держать требуемую версию Spring Boot и при этом PostgreSQL 16.
+    exclude:
+      - org.springframework.boot.autoconfigure.flyway.FlywayAutoConfiguration
 
   servlet:
     multipart:
@@ -113,5 +115,3 @@ spring:
     exclude:
       - org.springframework.boot.autoconfigure.jdbc.DataSourceAutoConfiguration
       - org.springframework.boot.autoconfigure.orm.jpa.HibernateJpaAutoConfiguration
-  flyway:
-    enabled: false
