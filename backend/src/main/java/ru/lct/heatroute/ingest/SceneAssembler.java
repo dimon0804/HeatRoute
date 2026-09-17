@@ -115,6 +115,7 @@ public class SceneAssembler {
         List<FutureOks> future = buildFutureOks(c, segments, diag);
         List<RestrictionObject> restrictions = buildRestrictions(c, diag);
         linkOwnFootprints(future, restrictions, diag);
+        addExistingNetworkAsRestriction(segments, restrictions, diag);
 
         Envelope extent = new Envelope();
         segments.forEach(s -> extent.expandToInclude(s.getGeometry().getEnvelopeInternal()));
@@ -518,6 +519,49 @@ public class SceneAssembler {
                 RestrictionObject::getCanonicalType, LinkedHashMap::new, Collectors.counting()));
         diag.info("restriction.summary", "Ограничения по типам: " + byType);
         return out;
+    }
+
+    /**
+     * Идентификатор-маркер: собственным «владельцем» существующей тепловой сети
+     * считается точка врезки. Новая сеть начинается прямо на существующей, поэтому
+     * первое звено от точки врезки не обязано выдерживать до неё зазор.
+     */
+    public static final String TIE_IN_OWNER = "tie-in";
+
+    /**
+     * Существующая тепловая сеть как пространственное ограничение (таблица 5.1 ТП):
+     * пересечение допускается специальным проходом с коэффициентом 1,05, а идти рядом
+     * ближе одного метра нельзя.
+     * <p>
+     * Во входных данных она приходит объектом {@code heat_network}, а не
+     * {@code restriction}, и без этого шага новая трасса пересекала бы её бесплатно
+     * и могла лечь на неё вплотную.
+     */
+    private void addExistingNetworkAsRestriction(List<ExistingSegment> segments,
+                                                 List<RestrictionObject> restrictions,
+                                                 IngestDiagnostics diag) {
+        if (segments.isEmpty()) {
+            return;
+        }
+        for (ExistingSegment segment : segments) {
+            restrictions.add(RestrictionObject.builder()
+                    .id("existing-net:" + segment.getId())
+                    .geometry(segment.getGeometry())
+                    .rawType(ObjectType.HEAT_NETWORK.code())
+                    .canonicalType(ObjectType.HEAT_NETWORK.code())
+                    .rule(catalog.ruleFor(ObjectType.HEAT_NETWORK.code()))
+                    .unknownType(false)
+                    .diameter(segment.getDiameter())
+                    .ownerOksIds(java.util.Set.of(TIE_IN_OWNER))
+                    .build());
+        }
+        diag.info("restriction.existingNetwork", String.format(
+                "Существующая тепловая сеть учтена как объект со специальным проходом "
+                        + "по таблице 5.1: %d участков, пересечение с коэффициентом %.2f, "
+                        + "минимальное расстояние при прохождении рядом %.1f м",
+                segments.size(),
+                catalog.ruleFor(ObjectType.HEAT_NETWORK.code()).getKSpecial(),
+                catalog.ruleFor(ObjectType.HEAT_NETWORK.code()).getMinHorizontalDist()));
     }
 
     // =================================================================================

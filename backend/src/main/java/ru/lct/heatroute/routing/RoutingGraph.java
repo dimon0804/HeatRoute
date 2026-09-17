@@ -558,4 +558,13 @@ public class RoutingGraph {
     public static Node tieInCandidate(Coordinate c, String externalId) {
         return new Node(-1, c, NodeKind.TIE_IN_CANDIDATE, null, externalId);
     }
+
+    /**
+     * Узел врезки, для которого защитная полоса существующей тепловой сети не действует:
+     * новая сеть в этой точке к существующей и присоединяется.
+     */
+    public static Node tieInCandidateOnNetwork(Coordinate c, String externalId) {
+        return new Node(-1, c, NodeKind.TIE_IN_CANDIDATE,
+                ru.lct.heatroute.ingest.SceneAssembler.TIE_IN_OWNER, externalId);
+    }
 }

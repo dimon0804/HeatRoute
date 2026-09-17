@@ -64,8 +64,15 @@ class SceneIngestTest {
         assertThat(s.getSegments()).hasSize(29);
         assertThat(s.getChambers()).hasSize(9);
         assertThat(s.getFutureOks()).hasSize(17);
-        // 85 существующих зданий + 2 водных объекта + 1 железная дорога
-        assertThat(s.getRestrictions()).hasSize(88);
+        // 85 существующих зданий + 2 водных объекта + 1 железная дорога = 88 из входного
+        // файла, плюс 29 участков существующей тепловой сети: таблица 5.1 ТП относит
+        // её к объектам, которые пересекаются только специальным проходом.
+        assertThat(s.getRestrictions()).hasSize(88 + 29);
+        assertThat(s.getRestrictions())
+                .filteredOn(r -> "heat_network".equals(r.getCanonicalType()))
+                .hasSize(29)
+                .allMatch(r -> r.getRule().getRule()
+                        == ru.lct.heatroute.domain.reference.RestrictionRule.SPECIAL_CROSSING);
         assertThat(s.getSource()).isNotNull();
     }
 
@@ -150,14 +157,22 @@ class SceneIngestTest {
                 .allMatch(o -> o.getFootprint().covers(o.getConnectionPoint()));
 
         // Обратная связь проставлена ровно у опознанных ограничений и ни у каких других.
+        // Владелец проставляется и участкам существующей сети, но там это маркер точки
+        // врезки, а не контур ОКС, — поэтому считаем только полигоны-ограничения.
         long owned = s.getRestrictions().stream()
                 .filter(r -> !r.getOwnerOksIds().isEmpty())
+                .filter(r -> !r.getOwnerOksIds().contains(SceneAssembler.TIE_IN_OWNER))
                 .count();
         // В наборе одно здание содержит две точки подключения, поэтому контуров 16, а не 17.
         assertThat(owned).isEqualTo(16);
+        // Владельцы есть ещё у участков существующей сети — там это маркер точки врезки,
+        // а не контур ОКС, поэтому их считаем отдельно.
         assertThat(s.getRestrictions())
                 .filteredOn(r -> r.getOwnerOksIds().isEmpty())
                 .hasSize(88 - 16);
+        assertThat(s.getRestrictions())
+                .filteredOn(r -> r.getOwnerOksIds().contains(SceneAssembler.TIE_IN_OWNER))
+                .hasSize(29);
 
         // Здание с двумя точками подключения должно числиться контуром обоих ОКС:
         // иначе его буфер перекроет подход к тому из них, что запомнился не последним.
@@ -165,7 +180,10 @@ class SceneIngestTest {
                 .filter(r -> r.getOwnerOksIds().size() == 2)
                 .count();
         assertThat(twoOwners).isEqualTo(1);
+        // Семнадцать ссылок на ОКС ровно по числу точек подключения; маркеры точки
+        // врезки у участков существующей сети в этот счёт не входят.
         assertThat(s.getRestrictions().stream()
+                .filter(r -> !r.getOwnerOksIds().contains(SceneAssembler.TIE_IN_OWNER))
                 .mapToInt(r -> r.getOwnerOksIds().size()).sum()).isEqualTo(17);
     }
 

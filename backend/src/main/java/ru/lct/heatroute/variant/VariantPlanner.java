@@ -131,7 +131,10 @@ public class VariantPlanner {
             extras.add(RoutingGraph.terminal(oks.getConnectionPoint().getCoordinate(), oks.getId()));
         }
         for (TieInCandidate c : candidates) {
-            extras.add(RoutingGraph.tieInCandidate(c.getLocation(), c.getId()));
+            // Точка врезки лежит прямо на существующей сети, то есть внутри её
+            // защитной полосы. Первое звено новой трассы от неё эту полосу не нарушает:
+            // сеть в этом месте и присоединяется.
+            extras.add(RoutingGraph.tieInCandidateOnNetwork(c.getLocation(), c.getId()));
         }
         RoutingGraph graph = RoutingGraph.build(field, designDn, extras, routingProps);
         progress.report(0.45, "Граф маршрутизации построен");
@@ -161,8 +164,16 @@ public class VariantPlanner {
 
         // --- 3. Разбиения ОКС ---------------------------------------------------------------
         progress.report(0.50, "Кластеризация перспективных ОКС");
+
+        // Расстояния от каждого терминала до всех узлов графа. Считаются один раз
+        // и служат и кластеризации, и отсеву кандидатов врезки.
+        Map<String, double[]> distanceFromTerminal = new LinkedHashMap<>();
+        for (SteinerTreeBuilder.Terminal t : terminals) {
+            distanceFromTerminal.put(t.getOksId(), graph.distancesFrom(t.getNodeIndex()));
+        }
+
         List<List<List<SteinerTreeBuilder.Terminal>>> partitions =
-                new OksClustering(graph).partitions(terminals, 3);
+                new OksClustering(graph, distanceFromTerminal).partitions(terminals, 3);
 
         // --- 4. Перебор ---------------------------------------------------------------------
         List<CalculationVariant> produced = new ArrayList<>();
@@ -170,7 +181,8 @@ public class VariantPlanner {
 
         for (List<List<SteinerTreeBuilder.Terminal>> partition : partitions) {
             CalculationVariant variant = buildVariant(scene, graph, field, located,
-                    partition, oksById, terminalNodeIds, "v" + (++variantCounter));
+                    partition, oksById, terminalNodeIds, distanceFromTerminal,
+                    "v" + (++variantCounter));
             if (variant != null) {
                 produced.add(variant);
             }
@@ -202,6 +214,7 @@ public class VariantPlanner {
                                             List<List<SteinerTreeBuilder.Terminal>> partition,
                                             Map<String, FutureOks> oksById,
                                             Map<String, String> terminalNodeIds,
+                                            Map<String, double[]> distanceFromTerminal,
                                             String variantId) {
         List<NewSegment> segments = new ArrayList<>();
         List<NewChamberResult> chambers = new ArrayList<>();
@@ -223,7 +236,7 @@ public class VariantPlanner {
                 continue;
             }
             GroupResult best = null;
-            for (TieInCandidate candidate : candidates) {
+            for (TieInCandidate candidate : shortlist(candidates, group, distanceFromTerminal)) {
                 GroupResult result = buildGroup(scene, graph, field, candidate, group,
                         variantId, terminalNodeIds, oksById, ids,
                         consumedAtNode.getOrDefault(candidate.getGraphNodeIndex(), 0),
@@ -301,6 +314,46 @@ public class VariantPlanner {
     }
 
     /**
+     * Кандидаты врезки, отобранные по нижней оценке стоимости подключения группы.
+     * <p>
+     * Полная проверка кандидата — это построение дерева, материализация, расчёт
+     * реконструкции и стоимости. На десятках кандидатов и нескольких группах это
+     * основная доля времени расчёта. Нижняя оценка — сумма расстояний в графе
+     * от кандидата до терминалов группы — считается по уже готовой матрице
+     * расстояний и отбирает те же места, что и полная проверка, но мгновенно.
+     */
+    private List<TieInCandidate> shortlist(List<TieInCandidate> candidates,
+                                           List<SteinerTreeBuilder.Terminal> group,
+                                           Map<String, double[]> distanceFromTerminal) {
+        int limit = Math.max(1, routingProps.getTieInShortlistSize());
+        if (candidates.size() <= limit) {
+            return candidates;
+        }
+        List<TieInCandidate> sorted = new ArrayList<>(candidates);
+        Map<String, Double> estimate = new LinkedHashMap<>();
+        for (TieInCandidate candidate : sorted) {
+            double sum = 0;
+            boolean reachable = true;
+            for (SteinerTreeBuilder.Terminal terminal : group) {
+                double[] distances = distanceFromTerminal.get(terminal.getOksId());
+                double d = distances == null
+                        ? Double.POSITIVE_INFINITY : distances[candidate.getGraphNodeIndex()];
+                if (Double.isInfinite(d)) {
+                    reachable = false;
+                    break;
+                }
+                sum += d;
+            }
+            estimate.put(candidate.getId(), reachable ? sum : Double.POSITIVE_INFINITY);
+        }
+        sorted.sort(Comparator.comparingDouble(c -> estimate.get(c.getId())));
+        return sorted.stream()
+                .filter(c -> !Double.isInfinite(estimate.get(c.getId())))
+                .limit(limit)
+                .collect(Collectors.toList());
+    }
+
+    /**
      * Порядок предпочтения кандидатов: сначала подключить все ОКС, затем не нарушать
      * запрет пересечений, и только потом — дешевле.
      * <p>
@@ -365,9 +418,29 @@ public class VariantPlanner {
             return null;
         }
 
-        SteinerTreeBuilder.Result built = treeBuilder.build(graph,
-                candidate.getGraphNodeIndex(), group, rootSpareDegree, null);
-        if (built.isEmpty()) {
+        // Порядок подключения терминалов меняет форму дерева, поэтому эвристика
+        // запускается несколько раз с разными затравками, а лучшее дерево по длине
+        // отбирается здесь. Разброс между запусками на конкурсном наборе достигает
+        // десятых долей, и брать первый попавшийся результат незачем.
+        SteinerTreeBuilder.Result built = null;
+        double bestLength = Double.POSITIVE_INFINITY;
+        int restarts = Math.max(1, routingProps.getSteinerRestarts());
+        for (int attempt = 0; attempt < restarts; attempt++) {
+            SteinerTreeBuilder.Terminal seed = attempt == 0 || attempt > group.size()
+                    ? null : group.get((attempt - 1) % group.size());
+            SteinerTreeBuilder.Result trial = treeBuilder.build(graph,
+                    candidate.getGraphNodeIndex(), group, rootSpareDegree, seed);
+            if (trial.isEmpty()) {
+                continue;
+            }
+            double length = trial.getTree().totalLength(graph)
+                    + trial.getUnreachableOks().size() * 1e6;
+            if (length < bestLength) {
+                bestLength = length;
+                built = trial;
+            }
+        }
+        if (built == null || built.isEmpty()) {
             return null;
         }
 
@@ -498,9 +571,11 @@ public class VariantPlanner {
     /** Кластеризация ОКС по расстоянию в графе маршрутизации. */
     private static class OksClustering {
         private final RoutingGraph graph;
+        private final Map<String, double[]> distanceFromTerminal;
 
-        OksClustering(RoutingGraph graph) {
+        OksClustering(RoutingGraph graph, Map<String, double[]> distanceFromTerminal) {
             this.graph = graph;
+            this.distanceFromTerminal = distanceFromTerminal;
         }
 
         /**
@@ -522,7 +597,10 @@ public class VariantPlanner {
             int n = terminals.size();
             double[][] dist = new double[n][];
             for (int i = 0; i < n; i++) {
-                double[] full = graph.distancesFrom(terminals.get(i).getNodeIndex());
+                double[] full = distanceFromTerminal.get(terminals.get(i).getOksId());
+                if (full == null) {
+                    full = graph.distancesFrom(terminals.get(i).getNodeIndex());
+                }
                 dist[i] = new double[n];
                 for (int j = 0; j < n; j++) {
                     dist[i][j] = full[terminals.get(j).getNodeIndex()];
