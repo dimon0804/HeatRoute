@@ -67,20 +67,30 @@ public class NetworkMaterializer {
 
     /** Счётчик идентификаторов выходных объектов в пределах варианта. */
     public static class IdSequence {
+        private final String variantId;
         private int segment;
         private int chamber;
         private int node;
+        private int tieIn;
+
+        public IdSequence(String variantId) {
+            this.variantId = variantId;
+        }
 
         public String nextSegment() {
-            return "new_" + (++segment);
+            return "new_" + variantId + "_" + (++segment);
         }
 
         public String nextChamber() {
-            return "ch_" + (++chamber);
+            return "ch_" + variantId + "_" + (++chamber);
         }
 
         public String nextNode() {
-            return "tn_" + (++node);
+            return "tn_" + variantId + "_" + (++node);
+        }
+
+        public String nextTieIn() {
+            return "tie_" + variantId + "_" + (++tieIn);
         }
     }
 
@@ -213,7 +223,7 @@ public class NetworkMaterializer {
         boolean structural = structuralId != null;
 
         if (structural) {
-            closeSegment(open, to, structuralId, variantId, segments, chamberAdjacent);
+            closeSegment(open, to, structuralId, variantId, segments, chamberAdjacent, ids);
             for (int child : tree.childrenOf(node)) {
                 double childFlow = flows.getOrDefault(child, 0d);
                 RunState childRun = adjustRun(afterEdge, childFlow, overCapacity, tree, child);
@@ -229,7 +239,7 @@ public class NetworkMaterializer {
                 // чтобы участок не остался без конечного узла в выгрузке.
                 String id = ids.nextNode();
                 technicalNodes.add(technicalNode(id, variantId, to, "конец ветви"));
-                closeSegment(open, to, id, variantId, segments, chamberAdjacent);
+                closeSegment(open, to, id, variantId, segments, chamberAdjacent, ids);
                 return;
             }
             descend(tree, graph, field, kids.get(0), open, afterEdge, flows, nodeIds, ids,
@@ -335,7 +345,7 @@ public class NetworkMaterializer {
                 String nodeId = ids.nextNode();
                 technicalNodes.add(technicalNode(nodeId, variantId, pa,
                         reasonFor(open, dn, laying, k)));
-                closeSegment(open, pa, nodeId, variantId, segments, chamberAdjacent);
+                closeSegment(open, pa, nodeId, variantId, segments, chamberAdjacent, ids);
                 open.startNodeId = nodeId;
                 open.coords.add(pa);
                 open.flow = flow;
@@ -366,7 +376,8 @@ public class NetworkMaterializer {
 
     private void closeSegment(OpenSegment open, Coordinate at, String endNodeId,
                               String variantId, List<NewSegment> segments,
-                              Map<String, Set<Integer>> chamberAdjacent) {
+                              Map<String, Set<Integer>> chamberAdjacent,
+                              IdSequence ids) {
         if (open.coords.size() < 2) {
             open.coords.clear();
             return;
@@ -382,9 +393,8 @@ public class NetworkMaterializer {
         }
         double cost = length * catalog.newCostPerM(open.dn) * open.kSpecial;
 
-        String id = "seg:" + open.startNodeId + ":" + endNodeId + ":" + segments.size();
         segments.add(NewSegment.builder()
-                .id(id)
+                .id(ids.nextSegment())
                 .variantId(variantId)
                 .geometry(Geo.line(coords))
                 .startNodeId(open.startNodeId)

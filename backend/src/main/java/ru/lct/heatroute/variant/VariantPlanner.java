@@ -184,7 +184,7 @@ public class VariantPlanner {
         List<TieInResult> tieIns = new ArrayList<>();
         List<String> unconnected = new ArrayList<>();
         Map<String, Integer> chamberMaxDn = new LinkedHashMap<>();
-        NetworkMaterializer.IdSequence ids = new NetworkMaterializer.IdSequence();
+        NetworkMaterializer.IdSequence ids = new NetworkMaterializer.IdSequence(variantId);
         Set<String> tieInSignature = new LinkedHashSet<>();
 
         // Сколько примыканий у каждого узла врезки уже занято другими частями сети
@@ -333,7 +333,7 @@ public class VariantPlanner {
         }
 
         TieInResult tieIn = TieInResult.builder()
-                .id("tie_" + variantId + "_" + candidate.getId().hashCode())
+                .id(ids.nextTieIn())
                 .variantId(variantId)
                 .location(Geo.point(candidate.getLocation()))
                 .existingObjectId(candidate.getExistingObjectId())

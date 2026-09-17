@@ -119,6 +119,10 @@ public class RoutingGraph {
                     extra.getTerminalOksId(), extra.getExternalId()));
         }
 
+        // Слой препятствий готовится до параллельной фазы: внутри неё ленивая
+        // инициализация подготовленных геометрий недопустима.
+        field.prepare(dn);
+
         RoutingGraph graph = new RoutingGraph(nodes, dn);
         graph.indexNodes();
         graph.connect(field, props);
@@ -159,10 +163,18 @@ public class RoutingGraph {
             pendingW.add(new ArrayList<>());
         }
 
-        long checks = 0;
-        long accepted = 0;
+        java.util.concurrent.atomic.LongAdder checks = new java.util.concurrent.atomic.LongAdder();
+        java.util.concurrent.atomic.LongAdder accepted = new java.util.concurrent.atomic.LongAdder();
 
+        // Проверка пары узлов независима от остальных, а пар сотни тысяч: работа
+        // раскладывается по ядрам. Каждый поток пишет только в свой список, поэтому
+        // общей блокировки не требуется.
+        List<List<long[]>> forward = new ArrayList<>(n);
         for (int i = 0; i < n; i++) {
+            forward.add(new ArrayList<>());
+        }
+
+        java.util.stream.IntStream.range(0, n).parallel().forEach(i -> {
             Node a = nodes.get(i);
             Coordinate ca = a.getLocation();
             boolean aWide = a.getKind() != NodeKind.OBSTACLE_VERTEX;
@@ -185,7 +197,7 @@ public class RoutingGraph {
                 if (length <= 0 || length > limit) {
                     continue;
                 }
-                checks++;
+                checks.increment();
 
                 org.locationtech.jts.geom.LineString probe = field.probe(ca, cb);
                 if (probe == null) {
@@ -199,8 +211,19 @@ public class RoutingGraph {
                     continue;
                 }
                 double weight = length * field.crossingCostFactor(probe, dn);
-                accepted++;
+                accepted.increment();
 
+                forward.get(i).add(new long[]{j, Double.doubleToLongBits(weight),
+                        Double.doubleToLongBits(length)});
+            }
+        });
+
+        // Сборка двусторонней смежности из односторонних списков.
+        for (int i = 0; i < n; i++) {
+            for (long[] e : forward.get(i)) {
+                int j = (int) e[0];
+                double weight = Double.longBitsToDouble(e[1]);
+                double length = Double.longBitsToDouble(e[2]);
                 pending.get(i).add(new int[]{j});
                 pendingW.get(i).add(new double[]{weight, length});
                 pending.get(j).add(new int[]{i});
@@ -232,7 +255,8 @@ public class RoutingGraph {
         edgeStart[n] = cursor;
 
         log.debug("Проверено пар узлов: {}, принято рёбер: {} ({}%)",
-                checks, accepted, checks == 0 ? 0 : accepted * 100 / checks);
+                checks.sum(), accepted.sum(),
+                checks.sum() == 0 ? 0 : accepted.sum() * 100 / checks.sum());
     }
 
     private boolean passable(ObstacleField field,

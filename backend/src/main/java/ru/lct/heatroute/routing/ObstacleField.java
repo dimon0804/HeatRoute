@@ -82,7 +82,7 @@ public class ObstacleField {
     private final List<RestrictionObject> restrictions;
 
     /** Поля препятствий по условному диаметру: буферы + индекс. */
-    private final Map<Integer, Layer> layers = new HashMap<>();
+    private final Map<Integer, Layer> layers = new java.util.concurrent.ConcurrentHashMap<>();
 
     /** Фабрика без модели точности — для одноразовых отрезков-проб. */
     private static final org.locationtech.jts.geom.GeometryFactory RAW =
@@ -109,8 +109,19 @@ public class ObstacleField {
     //  Построение слоя под условный диаметр
     // =================================================================================
 
-    private synchronized Layer layer(int dn) {
-        return layers.computeIfAbsent(dn, this::buildLayer);
+    private Layer layer(int dn) {
+        Layer cached = layers.get(dn);
+        if (cached != null) {
+            return cached;
+        }
+        synchronized (this) {
+            return layers.computeIfAbsent(dn, this::buildLayer);
+        }
+    }
+
+    /** Подготовить слой под указанный ДУ заранее, до параллельной работы с ним. */
+    public void prepare(int dn) {
+        layer(dn);
     }
 
     private Layer buildLayer(int dn) {
@@ -151,10 +162,30 @@ public class ObstacleField {
         layer.forbiddenIndex.build();
         layer.specialIndex.build();
 
+        // Прогрев: PreparedGeometry строит свой индекс отрезков при первом обращении.
+        // Ленивая инициализация небезопасна при одновременном доступе из нескольких
+        // потоков, поэтому она выполняется здесь, до того как граф начнёт строиться
+        // параллельно.
+        warmUp(layer);
+
         log.debug("Поле препятствий для ДУ {}: запрещённых {}, специальных {}, {} мс",
                 dn, layer.forbidden.size(), layer.special.size(),
                 (System.nanoTime() - started) / 1_000_000);
         return layer;
+    }
+
+    /** Однократное обращение к каждой подготовленной геометрии в один поток. */
+    private void warmUp(Layer layer) {
+        LineString probe = RAW.createLineString(new Coordinate[]{
+                new Coordinate(0, 0), new Coordinate(1e-3, 1e-3)});
+        for (Obstacle o : layer.forbidden) {
+            o.getPreparedBuffered().intersects(probe);
+            o.getPreparedSource().intersects(probe);
+        }
+        for (Obstacle o : layer.special) {
+            o.getPreparedBuffered().intersects(probe);
+            o.getPreparedSource().intersects(probe);
+        }
     }
 
     // =================================================================================
