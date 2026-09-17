@@ -30,3 +30,9 @@ frontend/shots/
 frontend/vite.log
 backend/run.log
 .playwright-mcp/
+
+# --- сквозные тесты интерфейса ---
+frontend/test-results/
+frontend/playwright-report/
+frontend/blob-report/
+frontend/.playwright/
