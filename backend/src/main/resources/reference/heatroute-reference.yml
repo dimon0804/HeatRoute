@@ -1,0 +1,200 @@
+# =====================================================================================
+#  Справочные данные кейса «Сервис моделирования трасс подключения к тепловым сетям»
+#  Источник: Техническое приложение ЛЦТ-2026, таблицы 4.1, 4.2, 4.3, 5.1, 8.2 и разделы
+#            6, 8, 9. Значения вынесены из кода намеренно: проверочный набор может
+#            приехать с другим справочником, и его подменяют файлом, а не пересборкой.
+#
+#  Переопределение снаружи:
+#      java -jar heatroute.jar --spring.config.additional-location=file:/opt/heatroute/
+#      (файл reference/heatroute-reference.yml рядом; либо любой ключ heatroute.reference.*
+#       через переменные окружения, например HEATROUTE_REFERENCE_TIEINCOST=4500000)
+# =====================================================================================
+heatroute:
+  reference:
+
+    # ---------------------------------------------------------------------------------
+    # Таблица 4.1 — условные диаметры, пропускная способность, предельная длина, цена
+    # Таблица 4.2 — расчётные габариты пары труб (ширина/высота), м
+    # ---------------------------------------------------------------------------------
+    #  dn            — условный диаметр, мм
+    #  capacityTph   — пропускная способность, т/ч
+    #  maxRunLength  — предельная длина непрерывной части сети одного ДУ, м
+    #  newCostPerM   — новое строительство, руб./м
+    #  reconCostPerM — реконструкция существующей сети, руб./м
+    #  casingOd      — наружный диаметр оболочки, м
+    #  clearance     — просвет между оболочками, м
+    #  pairWidth     — расчётная ширина пары труб, м
+    #  pairHeight    — расчётная высота (= наружный диаметр оболочки), м
+    diameters:
+      - { dn: 50,   capacityTph: 3.5,     maxRunLength: 181,   newCostPerM: 74023,  reconCostPerM: 96180,  casingOd: 0.125, clearance: 0.150, pairWidth: 0.400, pairHeight: 0.125 }
+      - { dn: 65,   capacityTph: 8.3,     maxRunLength: 245,   newCostPerM: 78631,  reconCostPerM: 109989, casingOd: 0.140, clearance: 0.150, pairWidth: 0.430, pairHeight: 0.140 }
+      - { dn: 80,   capacityTph: 13.2,    maxRunLength: 327,   newCostPerM: 83530,  reconCostPerM: 117582, casingOd: 0.160, clearance: 0.150, pairWidth: 0.470, pairHeight: 0.160 }
+      - { dn: 100,  capacityTph: 22.3,    maxRunLength: 419,   newCostPerM: 89748,  reconCostPerM: 133694, casingOd: 0.180, clearance: 0.150, pairWidth: 0.510, pairHeight: 0.180 }
+      - { dn: 125,  capacityTph: 40.2,    maxRunLength: 554,   newCostPerM: 97275,  reconCostPerM: 148030, casingOd: 0.225, clearance: 0.150, pairWidth: 0.600, pairHeight: 0.225 }
+      - { dn: 150,  capacityTph: 65.1,    maxRunLength: 696,   newCostPerM: 105507, reconCostPerM: 152295, casingOd: 0.250, clearance: 0.150, pairWidth: 0.650, pairHeight: 0.250 }
+      - { dn: 200,  capacityTph: 152.3,   maxRunLength: 1042,  newCostPerM: 120275, reconCostPerM: 181766, casingOd: 0.315, clearance: 0.250, pairWidth: 0.880, pairHeight: 0.315 }
+      - { dn: 250,  capacityTph: 274.9,   maxRunLength: 1379,  newCostPerM: 135323, reconCostPerM: 202030, casingOd: 0.400, clearance: 0.250, pairWidth: 1.050, pairHeight: 0.400 }
+      - { dn: 300,  capacityTph: 437.4,   maxRunLength: 1718,  newCostPerM: 150022, reconCostPerM: 228707, casingOd: 0.450, clearance: 0.250, pairWidth: 1.150, pairHeight: 0.450 }
+      - { dn: 400,  capacityTph: 943.1,   maxRunLength: 2477,  newCostPerM: 190299, reconCostPerM: 271317, casingOd: 0.560, clearance: 0.250, pairWidth: 1.370, pairHeight: 0.560 }
+      - { dn: 500,  capacityTph: 1663.4,  maxRunLength: 3245,  newCostPerM: 224137, reconCostPerM: 333884, casingOd: 0.710, clearance: 0.250, pairWidth: 1.670, pairHeight: 0.710 }
+      - { dn: 600,  capacityTph: 2627.7,  maxRunLength: 4037,  newCostPerM: 264790, reconCostPerM: 372703, casingOd: 0.800, clearance: 0.250, pairWidth: 1.850, pairHeight: 0.800 }
+      - { dn: 700,  capacityTph: 3735.1,  maxRunLength: 4775,  newCostPerM: 324298, reconCostPerM: 439571, casingOd: 0.900, clearance: 0.250, pairWidth: 2.050, pairHeight: 0.900 }
+      - { dn: 800,  capacityTph: 5296.8,  maxRunLength: 5644,  newCostPerM: 325996, reconCostPerM: 489918, casingOd: 1.000, clearance: 0.250, pairWidth: 2.250, pairHeight: 1.000 }
+      - { dn: 900,  capacityTph: 7165.0,  maxRunLength: 6518,  newCostPerM: 327693, reconCostPerM: 553607, casingOd: 1.100, clearance: 0.250, pairWidth: 2.450, pairHeight: 1.100 }
+      - { dn: 1000, capacityTph: 9391.8,  maxRunLength: 7419,  newCostPerM: 418777, reconCostPerM: 606679, casingOd: 1.200, clearance: 0.250, pairWidth: 2.650, pairHeight: 1.200 }
+      - { dn: 1200, capacityTph: 15012.8, maxRunLength: 9288,  newCostPerM: 428074, reconCostPerM: 825692, casingOd: 1.425, clearance: 0.250, pairWidth: 3.100, pairHeight: 1.425 }
+      - { dn: 1400, capacityTph: 22501.9, maxRunLength: 11276, newCostPerM: 683417, reconCostPerM: 978584, casingOd: 1.600, clearance: 0.250, pairWidth: 3.450, pairHeight: 1.600 }
+
+    # ---------------------------------------------------------------------------------
+    # Таблица 8.2 — шкала стоимости тепловой камеры по наибольшему примыкающему ДУ.
+    # Действует и для строительства новой камеры, и для реконструкции существующей.
+    # ---------------------------------------------------------------------------------
+    chamberCostScale:
+      - { dnFrom: 50,   dnTo: 200,  cost: 3000000 }
+      - { dnFrom: 250,  dnTo: 500,  cost: 5000000 }
+      - { dnFrom: 600,  dnTo: 1000, cost: 8000000 }
+      - { dnFrom: 1200, dnTo: 1400, cost: 12000000 }
+
+    # ---------------------------------------------------------------------------------
+    # Раздел 8.2 / 8.3 / 9 — константы стоимости и ранжирования
+    # ---------------------------------------------------------------------------------
+    tieInCost: 5000000                 # стоимость одной независимой врезки, руб.
+    unconnectedPenaltyFixed: 100000000  # фиксированная часть штрафа за неподключенный ОКС, руб.
+    unconnectedPenaltyPerTph: 500000    # переменная часть штрафа, руб. за 1 т/ч
+
+    scoring:
+      costWeight: 0.7                  # S = 0.7*(C/costBase) + 0.3*(L/lengthBase)
+      lengthWeight: 0.3
+      costBase: 25000000               # базовая стоимость, руб.
+      lengthBase: 100                  # базовая протяжённость, м
+
+    # Раздел 8.2: врезка выполняется в существующей камере, если она ближе этого
+    # расстояния и число примыкающих участков после подключения не превысит maxChamberDegree.
+    chamberSnapRadius: 10.0            # м
+    maxChamberDegree: 4                # 1 к источнику + не более 3 в прочих направлениях
+
+    # ---------------------------------------------------------------------------------
+    # Раздел 6 — трассировка с учётом глубины (дополнительная задача)
+    # ---------------------------------------------------------------------------------
+    depth:
+      normalDepth: 3.0                 # обычная глубина до верха габарита, м
+      minDepth: 0.7
+      maxDepth: 6.0                    # верхняя граница поиска (параметр, раздел 4 прил.)
+      step: 0.5                        # шаг подбора глубины, м
+      freeDepthThreshold: 3.0          # до этой глубины стоимость не меняется
+      costPerExtraMeter: 0.10          # Kгл = 1 + 0.10*(h-3) при h > 3
+      maxSlope: 0.10                   # м/м: на 1 м перепада не менее 10 м по горизонтали
+      crossingFlatLength: 4.0          # длина горизонтальной вставки в зоне пересечения, м
+      crossingFlatHalf: 2.0            # по 2 м с каждой стороны от точки пересечения
+
+    # Таблица 4.3 — условные параметры существующих линейных коммуникаций.
+    # depthToTop — глубина до верха габарита, м. Для heat_network габарит берётся
+    # из таблицы 4.2 по фактическому ДУ участка (width/height = null).
+    existingUtilities:
+      gas_pipeline:  { width: 0.400, height: 0.400, depthToTop: 2.8 }
+      power_cable:   { width: 0.200, height: 0.200, depthToTop: 2.7 }
+      heat_network:  { width: null,  height: null,  depthToTop: 3.0 }
+
+    # ---------------------------------------------------------------------------------
+    # Таблица 5.1 — правила по типам пространственных ограничений
+    # ---------------------------------------------------------------------------------
+    #  rule                 — FORBIDDEN (обойти) | SPECIAL_CROSSING (специальный проход)
+    #  minHorizontalDist    — минимальное горизонтальное расстояние, м (габарит-в-габарит)
+    #  minHorizontalByDn    — если расстояние зависит от ДУ новой сети (существующий ОКС)
+    #  minCrossingAngleDeg  — минимальный угол пересечения, град. (null — не задан)
+    #  verticalRule         — BELOW_SURFACE | ABOVE_OR_BELOW | null
+    #  minTopBelowSurface   — верх габарита новой сети не выше этой глубины, м
+    #  minVerticalClearance — минимальный вертикальный просвет до коммуникации, м
+    #  specialMarginM       — вынос границ специального участка за объект, м
+    #  specialWithinPolygon — специальный участок покрывает весь полигон объекта
+    #  kSpecial             — коэффициент стоимости специального прохода
+    restrictions:
+      oks_existing:
+        rule: FORBIDDEN
+        minHorizontalByDn:
+          - { dnTo: 400,  dist: 5.0 }   # менее 500 мм
+          - { dnTo: 800,  dist: 7.0 }   # 500–800 мм
+          - { dnTo: 1400, dist: 9.0 }   # 900 мм и более
+      park:
+        rule: FORBIDDEN
+        minHorizontalDist: 1.0
+      social_area:
+        rule: FORBIDDEN
+        minHorizontalDist: 1.0
+      prohibited_site:
+        rule: FORBIDDEN
+        minHorizontalDist: 1.0
+      water:
+        rule: FORBIDDEN
+        minHorizontalDist: 1.0
+      road:
+        rule: SPECIAL_CROSSING
+        minHorizontalDist: 1.5
+        minCrossingAngleDeg: 45
+        verticalRule: BELOW_SURFACE
+        minTopBelowSurface: 1.0
+        specialWithinPolygon: true
+        specialMarginM: 3.0
+        kSpecial: 1.60
+      tram_tracks:
+        rule: SPECIAL_CROSSING
+        minHorizontalDist: 1.5
+        minCrossingAngleDeg: 45
+        verticalRule: BELOW_SURFACE
+        minTopBelowSurface: 1.2
+        specialWithinPolygon: true
+        specialMarginM: 3.0
+        kSpecial: 1.75
+      gas_pipeline:
+        rule: SPECIAL_CROSSING
+        minHorizontalDist: 2.0
+        verticalRule: ABOVE_OR_BELOW
+        minVerticalClearance: 0.2
+        specialWithinPolygon: false
+        specialMarginM: 2.0
+        kSpecial: 1.25
+      power_cable:
+        rule: SPECIAL_CROSSING
+        minHorizontalDist: 2.0
+        verticalRule: ABOVE_OR_BELOW
+        minVerticalClearance: 0.5
+        specialWithinPolygon: false
+        specialMarginM: 2.0
+        kSpecial: 1.15
+      heat_network:
+        rule: SPECIAL_CROSSING
+        minHorizontalDist: 1.0
+        verticalRule: ABOVE_OR_BELOW
+        minVerticalClearance: 0.5
+        specialWithinPolygon: false
+        specialMarginM: 2.0
+        kSpecial: 1.05
+
+    # Псевдонимы типов ограничений. Конкурсный набор пришёл со значениями `oks`
+    # и `railway`, которых нет в таблице 5.1 дословно. Сопоставление вынесено сюда,
+    # чтобы новый набор с другими написаниями не требовал правки алгоритма.
+    restrictionAliases:
+      oks: oks_existing
+      oks_exist: oks_existing
+      building: oks_existing
+      existing_building: oks_existing
+      railway: tram_tracks
+      railroad: tram_tracks
+      rail: tram_tracks
+      tram: tram_tracks
+      highway: road
+      street: road
+      river: water
+      water_object: water
+      green: park
+      green_area: park
+      gas: gas_pipeline
+      cable: power_cable
+      heating_network: heat_network
+      heat_net: heat_network
+
+    # Правило для типа ограничения, которого нет ни в таблице, ни в псевдонимах.
+    # Консервативный выбор: обходим с зазором 1 м и обязательно пишем в диагностику.
+    unknownRestriction:
+      rule: FORBIDDEN
+      minHorizontalDist: 1.0

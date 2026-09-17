@@ -1,0 +1,26 @@
+# --- сборка ---
+target/
+dist/
+build/
+node_modules/
+*.class
+*.jar
+!.mvn/wrapper/maven-wrapper.jar
+
+# --- среда разработки ---
+.idea/
+*.iml
+.vscode/
+.DS_Store
+Thumbs.db
+
+# --- локальное окружение ---
+.env
+.env.local
+*.log
+/tmp/
+/storage/
+
+# --- выгрузки расчёта ---
+data/output/
+data/tmp/

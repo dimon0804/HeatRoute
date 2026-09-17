@@ -1,0 +1,44 @@
+# =====================================================================================
+#  Сборка и запуск бэкенда. Требования ТЗ, раздел 3.2: Java 11, Spring Boot 2.6.3,
+#  развёртывание на Ubuntu Server 22.
+#
+#  Сборка многослойная: зависимости кешируются отдельно от исходников, поэтому
+#  повторная сборка после правки кода занимает секунды, а не минуты. На демонстрации
+#  это решает — пересобрать сервис при вопросе жюри можно прямо в зале.
+# =====================================================================================
+
+FROM maven:3.8.8-eclipse-temurin-11 AS deps
+WORKDIR /build
+COPY pom.xml .
+RUN mvn -B -q dependency:go-offline
+
+FROM deps AS build
+WORKDIR /build
+COPY src ./src
+RUN mvn -B -DskipTests package
+
+# Разбор fat jar на слои: библиотеки меняются редко, классы приложения — часто.
+RUN java -Djarmode=layertools -jar target/heatroute.jar extract --destination /layers
+
+FROM eclipse-temurin:11-jre-jammy AS runtime
+LABEL org.opencontainers.image.title="HeatRoute" \
+      org.opencontainers.image.description="Сервис моделирования трасс подключения к тепловым сетям (ЛЦТ 2026)" \
+      org.opencontainers.image.base.name="ubuntu:22.04"
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends curl tini \
+    && rm -rf /var/lib/apt/lists/* \
+    && useradd --system --create-home --uid 10001 heatroute \
+    && mkdir -p /var/lib/heatroute/storage /var/lib/heatroute/tmp \
+    && chown -R heatroute:heatroute /var/lib/heatroute
+
+USER heatroute
+WORKDIR /app
+
+COPY --from=build --chown=heatroute:heatroute /layers/dependencies/ ./
+COPY --from=build --chown=heatroute:heatroute /layers/spring-boot-loader/ ./
+COPY --from=build --chown=heatroute:heatroute /layers/snapshot-dependencies/ ./
+COPY --from=build --chown=heatroute:heatroute /layers/application/ ./
+
+EXPOSE 8080
+ENTRYPOINT ["/usr/bin/tini", "--", "java", "org.springframework.boot.loader.JarLauncher"]

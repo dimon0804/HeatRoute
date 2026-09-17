@@ -1,0 +1,117 @@
+spring:
+  application:
+    name: heatroute
+  config:
+    # Справочник технического приложения лежит отдельным файлом: его подменяют
+    # снаружи целиком, если проверочный набор приедет с другими значениями.
+    import: classpath:reference/heatroute-reference.yml
+
+  datasource:
+    url: ${HEATROUTE_DB_URL:jdbc:postgresql://localhost:5432/heatroute}
+    username: ${HEATROUTE_DB_USER:heatroute}
+    password: ${HEATROUTE_DB_PASSWORD:heatroute}
+    hikari:
+      # До 50 пользователей по ТЗ (раздел 3.2); расчёт идёт в пуле задач,
+      # а не в соединении, поэтому размер пула держим умеренным.
+      maximum-pool-size: 20
+      minimum-idle: 4
+      connection-timeout: 10000
+
+  jpa:
+    open-in-view: false
+    hibernate:
+      ddl-auto: validate
+    properties:
+      hibernate:
+        jdbc.batch_size: 200
+        order_inserts: true
+        dialect: org.hibernate.spatial.dialect.postgis.PostgisPG95Dialect
+
+  flyway:
+    enabled: true
+    baseline-on-migrate: true
+    locations: classpath:db/migration
+
+  servlet:
+    multipart:
+      # Требование ТЗ: входной файл до 3 ГБ. Загрузка идёт на диск, а не в память:
+      # file-size-threshold = 0 отправляет во временный файл сразу.
+      max-file-size: 3GB
+      max-request-size: 3GB
+      file-size-threshold: 0
+      location: ${HEATROUTE_TMP_DIR:${java.io.tmpdir}/heatroute}
+
+  jackson:
+    default-property-inclusion: non_null
+    serialization:
+      write-dates-as-timestamps: false
+
+server:
+  port: ${HEATROUTE_PORT:8080}
+  compression:
+    enabled: true
+    mime-types: application/json,application/geo+json,text/plain
+    min-response-size: 4096
+  tomcat:
+    max-swallow-size: -1
+    threads:
+      max: 100
+  error:
+    include-message: always
+
+springdoc:
+  swagger-ui:
+    path: /swagger-ui.html
+    operations-sorter: alpha
+    tags-sorter: alpha
+  api-docs:
+    path: /v3/api-docs
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics
+  endpoint:
+    health:
+      show-details: when_authorized
+
+logging:
+  level:
+    root: INFO
+    ru.lct.heatroute: DEBUG
+  pattern:
+    console: "%d{HH:mm:ss.SSS} %-5level [%thread] %logger{36} - %msg%n"
+
+heatroute:
+  storage:
+    # Временное дисковое хранилище: входные файлы и выгрузки не держатся в памяти.
+    root: ${HEATROUTE_STORAGE_DIR:${java.io.tmpdir}/heatroute/storage}
+    retentionHours: 72
+
+  geo:
+    utmZone: 37
+    northernHemisphere: true
+    snapTolerance: 0.5
+    simplifyTolerance: 0.25
+    bufferQuadrantSegments: 2
+
+  ingest:
+    existingFlowMode: ZERO
+    existingFlowCapacityFraction: 0.5
+    allowFlowOnConnectionPoint: true
+    deriveMissingConnectionPoint: true
+    failFast: false
+
+---
+# Профиль для запуска без базы данных: удобен на разборе алгоритма и в тестах.
+spring:
+  config:
+    activate:
+      on-profile: nodb
+  autoconfigure:
+    exclude:
+      - org.springframework.boot.autoconfigure.jdbc.DataSourceAutoConfiguration
+      - org.springframework.boot.autoconfigure.orm.jpa.HibernateJpaAutoConfiguration
+  flyway:
+    enabled: false
