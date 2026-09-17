@@ -48,7 +48,7 @@ public class ObstacleField {
     public static class Obstacle {
         private final String restrictionId;
         private final String canonicalType;
-        private final String ownerOksId;
+        private final java.util.Set<String> ownerOksIds;
         private final RestrictionRow rule;
         private final Geometry source;
         private final Geometry buffered;
@@ -58,12 +58,17 @@ public class ObstacleField {
         Obstacle(RestrictionObject r, Geometry buffered) {
             this.restrictionId = r.getId();
             this.canonicalType = r.getCanonicalType();
-            this.ownerOksId = r.getOwnerOksId();
+            this.ownerOksIds = r.getOwnerOksIds();
             this.rule = r.getRule();
             this.source = r.getGeometry();
             this.buffered = buffered;
             this.preparedBuffered = PreparedGeometryFactory.prepare(buffered);
             this.preparedSource = PreparedGeometryFactory.prepare(r.getGeometry());
+        }
+
+        /** Является ли препятствие собственным контуром указанного ОКС. */
+        public boolean isOwnedBy(String oksId) {
+            return oksId != null && ownerOksIds.contains(oksId);
         }
 
         public boolean isForbidden() {
@@ -192,7 +197,7 @@ public class ObstacleField {
         Layer layer = layer(dn);
         List<Obstacle> candidates = layer.forbiddenIndex.query(segment.getEnvelopeInternal());
         for (Obstacle o : candidates) {
-            if (exemptOksId != null && exemptOksId.equals(o.getOwnerOksId())) {
+            if (o.isOwnedBy(exemptOksId)) {
                 continue;
             }
             if (!o.getPreparedBuffered().intersects(segment)) {
@@ -324,6 +329,124 @@ public class ObstacleField {
     }
 
     // =================================================================================
+    //  Специальные участки
+    // =================================================================================
+
+    /** Интервал отрезка, попадающий в специальный проход. Доли длины от начала отрезка. */
+    @Getter
+    public static class SpecialInterval implements Comparable<SpecialInterval> {
+        private final double fromFraction;
+        private final double toFraction;
+        private final double kSpecial;
+        private final String crossingType;
+        private final String restrictionId;
+
+        SpecialInterval(double from, double to, double k, String type, String restrictionId) {
+            this.fromFraction = Math.max(0, Math.min(1, from));
+            this.toFraction = Math.max(0, Math.min(1, to));
+            this.kSpecial = k;
+            this.crossingType = type;
+            this.restrictionId = restrictionId;
+        }
+
+        @Override
+        public int compareTo(SpecialInterval o) {
+            return Double.compare(fromFraction, o.fromFraction);
+        }
+    }
+
+    /**
+     * Части прямого отрезка, которые должны быть выделены отдельными участками
+     * со способом прокладки «специальный проход» (раздел 5 ТП).
+     * <p>
+     * Границы специального участка задаёт таблица 5.1 и они различаются по типам:
+     * для дороги и трамвайных путей это весь полигон объекта плюс по 3 м за его
+     * границей, для газопровода, силового кабеля и существующей теплосети — по 2 м
+     * с каждой стороны от точки пересечения.
+     */
+    @SuppressWarnings("unchecked")
+    public List<SpecialInterval> specialIntervals(Coordinate a, Coordinate b, int dn) {
+        LineString segment = RAW.createLineString(new Coordinate[]{a, b});
+        double total = segment.getLength();
+        if (total <= 0) {
+            return List.of();
+        }
+        List<SpecialInterval> out = new ArrayList<>();
+        Layer layer = layer(dn);
+        List<Obstacle> candidates = layer.specialIndex.query(segment.getEnvelopeInternal());
+
+        for (Obstacle o : candidates) {
+            if (!o.getPreparedSource().intersects(segment)) {
+                continue;
+            }
+            double margin = o.getRule().getSpecialMarginM() / total;
+            double k = o.getRule().getKSpecial();
+
+            if (o.getRule().isSpecialWithinPolygon()) {
+                Geometry inside = segment.intersection(o.getSource());
+                for (int i = 0; i < inside.getNumGeometries(); i++) {
+                    Geometry part = inside.getGeometryN(i);
+                    Coordinate[] cs = part.getCoordinates();
+                    if (cs.length < 2) {
+                        continue;
+                    }
+                    double f1 = fractionOf(a, b, total, cs[0]);
+                    double f2 = fractionOf(a, b, total, cs[cs.length - 1]);
+                    out.add(new SpecialInterval(Math.min(f1, f2) - margin,
+                            Math.max(f1, f2) + margin, k, o.getCanonicalType(),
+                            o.getRestrictionId()));
+                }
+            } else {
+                Geometry crossings = o.getSource().getBoundary().intersection(segment);
+                for (Coordinate x : crossings.getCoordinates()) {
+                    double f = fractionOf(a, b, total, x);
+                    out.add(new SpecialInterval(f - margin, f + margin, k,
+                            o.getCanonicalType(), o.getRestrictionId()));
+                }
+            }
+        }
+        return mergeOverlapping(out);
+    }
+
+    /**
+     * Слияние пересекающихся специальных интервалов. Раздел 8.1 ТП требует, чтобы
+     * у одного участка был один набор расчётных параметров: если трасса пересекает
+     * два объекта подряд и их специальные зоны накладываются, разорвать участок
+     * между ними нельзя — берётся наибольший коэффициент.
+     */
+    private List<SpecialInterval> mergeOverlapping(List<SpecialInterval> intervals) {
+        if (intervals.size() <= 1) {
+            return intervals;
+        }
+        java.util.Collections.sort(intervals);
+        List<SpecialInterval> merged = new ArrayList<>();
+        SpecialInterval current = intervals.get(0);
+        for (int i = 1; i < intervals.size(); i++) {
+            SpecialInterval next = intervals.get(i);
+            if (next.getFromFraction() <= current.getToFraction()) {
+                boolean nextWins = next.getKSpecial() > current.getKSpecial();
+                current = new SpecialInterval(
+                        current.getFromFraction(),
+                        Math.max(current.getToFraction(), next.getToFraction()),
+                        Math.max(current.getKSpecial(), next.getKSpecial()),
+                        nextWins ? next.getCrossingType() : current.getCrossingType(),
+                        nextWins ? next.getRestrictionId() : current.getRestrictionId());
+            } else {
+                merged.add(current);
+                current = next;
+            }
+        }
+        merged.add(current);
+        return merged;
+    }
+
+    private static double fractionOf(Coordinate a, Coordinate b, double total, Coordinate p) {
+        double dx = b.x - a.x;
+        double dy = b.y - a.y;
+        return ((p.x - a.x) * dx + (p.y - a.y) * dy) / (total * total);
+    }
+
+    // =================================================================================
     //  Вершины для графа видимости
     // =================================================================================
 
@@ -360,18 +483,20 @@ public class ObstacleField {
             if (n < 3) {
                 continue;
             }
-            // Внешнее кольцо JTS ориентировано по часовой стрелке; выпуклая вершина —
-            // та, где обход поворачивает в ту же сторону, что и всё кольцо.
-            boolean clockwise = org.locationtech.jts.algorithm.Orientation.isCCW(ring);
+            // Ориентация внешнего кольца у результата буферизации не гарантирована,
+            // поэтому она определяется, а не предполагается. Выпуклая вершина — та,
+            // где обход поворачивает в сторону обхода кольца: у кольца против часовой
+            // стрелки это левый поворот, у кольца по часовой — правый.
+            boolean ccw = org.locationtech.jts.algorithm.Orientation.isCCW(ring);
+            int convexTurn = ccw
+                    ? org.locationtech.jts.algorithm.Orientation.COUNTERCLOCKWISE
+                    : org.locationtech.jts.algorithm.Orientation.CLOCKWISE;
             for (int i = 0; i < n; i++) {
                 Coordinate prev = ring[(i - 1 + n) % n];
                 Coordinate cur = ring[i];
                 Coordinate next = ring[(i + 1) % n];
                 int turn = org.locationtech.jts.algorithm.Orientation.index(prev, cur, next);
-                boolean convex = clockwise
-                        ? turn == org.locationtech.jts.algorithm.Orientation.CLOCKWISE
-                        : turn == org.locationtech.jts.algorithm.Orientation.COUNTERCLOCKWISE;
-                if (convex) {
+                if (turn == convexTurn) {
                     out.putIfAbsent(key(cur), cur);
                 }
             }

@@ -550,7 +550,7 @@ public class SceneAssembler {
         }
         index.build();
 
-        Map<String, String> ownerByRestriction = new LinkedHashMap<>();
+        Map<String, java.util.Set<String>> ownersByRestriction = new LinkedHashMap<>();
         List<String> matched = new ArrayList<>();
 
         for (int i = 0; i < future.size(); i++) {
@@ -576,14 +576,16 @@ public class SceneAssembler {
                     .footprintRestrictionId(owner.getId())
                     .footprintSource(FutureOks.FootprintSource.RESTRICTION_MATCH)
                     .build());
-            ownerByRestriction.put(owner.getId(), oks.getId());
+            ownersByRestriction.computeIfAbsent(owner.getId(),
+                    k -> new java.util.LinkedHashSet<>()).add(oks.getId());
             matched.add(oks.getId() + "->" + owner.getId());
         }
 
         for (int i = 0; i < restrictions.size(); i++) {
-            String ownerOks = ownerByRestriction.get(restrictions.get(i).getId());
-            if (ownerOks != null) {
-                restrictions.set(i, restrictions.get(i).toBuilder().ownerOksId(ownerOks).build());
+            java.util.Set<String> owners = ownersByRestriction.get(restrictions.get(i).getId());
+            if (owners != null) {
+                restrictions.set(i, restrictions.get(i).toBuilder()
+                        .ownerOksIds(java.util.Set.copyOf(owners)).build());
             }
         }
 

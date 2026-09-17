@@ -245,7 +245,7 @@ public class RoutingGraph {
         if (exemptA != null && exemptB != null && !exemptA.equals(exemptB)) {
             // Оба конца — терминалы разных ОКС: исключение действует для обоих контуров.
             ObstacleField.Obstacle blocker = field.blockingObstacle(probe, dn, exemptA);
-            return blocker == null || exemptB.equals(blocker.getOwnerOksId());
+            return blocker == null || blocker.isOwnedBy(exemptB);
         }
         return field.blockingObstacle(probe, dn, exemptA != null ? exemptA : exemptB) == null;
     }
@@ -364,10 +364,142 @@ public class RoutingGraph {
         return dist;
     }
 
+    /**
+     * Результат многоисточникового обхода: расстояние до каждого узла и предшественник
+     * на кратчайшем пути. Нужен эвристике Штейнера: на каждой итерации ищется терминал,
+     * ближайший не к одной точке, а ко всему уже построенному дереву.
+     */
+    @Getter
+    public static class Frontier {
+        private final double[] dist;
+        private final double[] length;
+        private final int[] prev;
+
+        Frontier(double[] dist, double[] length, int[] prev) {
+            this.dist = dist;
+            this.length = length;
+            this.prev = prev;
+        }
+
+        /** Путь от найденного узла назад к ближайшему источнику, включая оба конца. */
+        public int[] pathTo(int node) {
+            if (Double.isInfinite(dist[node])) {
+                return new int[0];
+            }
+            int count = 1;
+            for (int at = node; prev[at] >= 0; at = prev[at]) {
+                count++;
+            }
+            int[] path = new int[count];
+            int at = node;
+            for (int i = count - 1; i >= 0; i--) {
+                path[i] = at;
+                if (prev[at] >= 0) {
+                    at = prev[at];
+                }
+            }
+            return path;
+        }
+    }
+
+    /**
+     * Дейкстра сразу от множества источников: все они получают нулевое расстояние.
+     * Один проход по графу вместо отдельного поиска от каждого узла дерева.
+     */
+    public Frontier dijkstra(java.util.Collection<Integer> sources) {
+        return dijkstra(sources, java.util.Set.of());
+    }
+
+    /**
+     * То же, но часть узлов исключена из обхода. Нужно для ограничения на число
+     * участков, примыкающих к тепловой камере: узел, исчерпавший предел примыканий,
+     * не может ни принять новую ветвь, ни быть транзитным для неё.
+     */
+    public Frontier dijkstra(java.util.Collection<Integer> sources,
+                             java.util.Set<Integer> blocked) {
+        return dijkstra(sources, blocked, java.util.Set.of());
+    }
+
+    /**
+     * Обход с двумя видами ограничений.
+     *
+     * @param blocked   узлы, недоступные вовсе
+     * @param noTransit узлы, до которых дойти можно, но пройти насквозь нельзя.
+     *                  Так ведут себя точки подключения ОКС: трасса в них заканчивается,
+     *                  а не проходит через здание соседнего объекта транзитом.
+     */
+    public Frontier dijkstra(java.util.Collection<Integer> sources,
+                             java.util.Set<Integer> blocked,
+                             java.util.Set<Integer> noTransit) {
+        int n = nodes.size();
+        double[] dist = new double[n];
+        double[] len = new double[n];
+        int[] prev = new int[n];
+        boolean[] done = new boolean[n];
+        Arrays.fill(dist, Double.POSITIVE_INFINITY);
+        Arrays.fill(prev, -1);
+
+        PriorityQueue<long[]> queue = new PriorityQueue<>((x, y) ->
+                Double.compare(Double.longBitsToDouble(x[0]), Double.longBitsToDouble(y[0])));
+        for (int s : sources) {
+            if (blocked.contains(s)) {
+                continue;
+            }
+            dist[s] = 0;
+            queue.add(new long[]{Double.doubleToLongBits(0), s});
+        }
+
+        while (!queue.isEmpty()) {
+            long[] head = queue.poll();
+            int u = (int) head[1];
+            if (done[u]) {
+                continue;
+            }
+            done[u] = true;
+            if (noTransit.contains(u) && dist[u] > 0) {
+                // Узел достигнут, но дальше через него не идём.
+                continue;
+            }
+            for (int e = edgeStart[u]; e < edgeStart[u + 1]; e++) {
+                int v = edgeTarget[e];
+                if (blocked.contains(v)) {
+                    continue;
+                }
+                double nd = dist[u] + edgeWeight[e];
+                if (nd < dist[v]) {
+                    dist[v] = nd;
+                    len[v] = len[u] + edgeLength[e];
+                    prev[v] = u;
+                    queue.add(new long[]{Double.doubleToLongBits(nd), v});
+                }
+            }
+        }
+        return new Frontier(dist, len, prev);
+    }
+
+    /** Число рёбер, инцидентных узлу графа. Нужно для диагностики изоляции узлов. */
+    public int degreeOf(int node) {
+        return edgeStart[node + 1] - edgeStart[node];
+    }
+
+    /** Геометрическая длина ребра между соседними узлами; {@code NaN}, если ребра нет. */
+    public double edgeLength(int from, int to) {
+        for (int e = edgeStart[from]; e < edgeStart[from + 1]; e++) {
+            if (edgeTarget[e] == to) {
+                return edgeLength[e];
+            }
+        }
+        return Double.NaN;
+    }
+
     /** Координаты пути для построения геометрии участка. */
     public List<Coordinate> coordinates(Path path) {
-        List<Coordinate> out = new ArrayList<>(path.getNodes().length);
-        for (int index : path.getNodes()) {
+        return coordinates(path.getNodes());
+    }
+
+    public List<Coordinate> coordinates(int[] path) {
+        List<Coordinate> out = new ArrayList<>(path.length);
+        for (int index : path) {
             out.add(nodes.get(index).getLocation());
         }
         return out;

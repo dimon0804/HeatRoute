@@ -151,13 +151,22 @@ class SceneIngestTest {
 
         // Обратная связь проставлена ровно у опознанных ограничений и ни у каких других.
         long owned = s.getRestrictions().stream()
-                .filter(r -> r.getOwnerOksId() != null)
+                .filter(r -> !r.getOwnerOksIds().isEmpty())
                 .count();
         // В наборе одно здание содержит две точки подключения, поэтому контуров 16, а не 17.
         assertThat(owned).isEqualTo(16);
         assertThat(s.getRestrictions())
-                .filteredOn(r -> r.getOwnerOksId() == null)
+                .filteredOn(r -> r.getOwnerOksIds().isEmpty())
                 .hasSize(88 - 16);
+
+        // Здание с двумя точками подключения должно числиться контуром обоих ОКС:
+        // иначе его буфер перекроет подход к тому из них, что запомнился не последним.
+        long twoOwners = s.getRestrictions().stream()
+                .filter(r -> r.getOwnerOksIds().size() == 2)
+                .count();
+        assertThat(twoOwners).isEqualTo(1);
+        assertThat(s.getRestrictions().stream()
+                .mapToInt(r -> r.getOwnerOksIds().size()).sum()).isEqualTo(17);
     }
 
     @Test
