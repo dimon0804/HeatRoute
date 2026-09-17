@@ -68,11 +68,16 @@ export const api = {
     return `${BASE}/v1/datasets/${id}/source.geojson`
   },
 
-  submitJob(datasetId: string): Promise<Job> {
+  /**
+   * Запуск расчёта. Режим с глубиной — дополнительная задача кейса: подбирается
+   * глубина каждого участка, пересечения с существующими коммуникациями решаются
+   * проходом сверху или снизу, стоимость пересчитывается с коэффициентом по глубине.
+   */
+  submitJob(datasetId: string, withDepth = false): Promise<Job> {
     return request<Job>('/v1/jobs', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ datasetId }),
+      body: JSON.stringify({ datasetId, withDepth }),
     })
   },
 

@@ -94,7 +94,23 @@ export type ResultObjectType =
   | 'heat_chamber'
   | 'heat_chamber_reconstruction'
   | 'technical_node'
+  | 'depth_crossing'
   | 'variant_summary'
+
+/** Пересечение с существующей коммуникацией по глубине (дополнительная задача). */
+export interface DepthCrossingProps {
+  id: string
+  object_type: 'depth_crossing'
+  variant_id: string
+  segment_id: string
+  utility_id: string
+  utility_type: string
+  passage: 'above' | 'below'
+  new_depth: number
+  utility_depth: number
+  required_clearance: number
+  actual_clearance: number
+}
 
 export interface ResultSegmentProps {
   id: string

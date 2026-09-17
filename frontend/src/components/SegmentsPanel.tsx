@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react'
-import { flow, meters, money } from '../lib/format'
+import { flow, meters, money, RESTRICTION_LABELS } from '../lib/format'
 import { Badge, Empty, Section } from './ui'
 
 interface Props {
@@ -7,7 +7,7 @@ interface Props {
   activeVariant: string | null
 }
 
-type Tab = 'segments' | 'reconstruction'
+type Tab = 'segments' | 'reconstruction' | 'depth'
 
 /**
  * Таблицы участков и реконструкции.
@@ -20,7 +20,7 @@ export function SegmentsPanel({ result, activeVariant }: Props) {
   const [tab, setTab] = useState<Tab>('segments')
 
   const rows = useMemo(() => {
-    if (!result) return { segments: [], reconstruction: [] }
+    if (!result) return { segments: [], reconstruction: [], depth: [] }
     const match = (props: Record<string, unknown>) =>
       !activeVariant || props.variant_id === activeVariant
 
@@ -34,7 +34,11 @@ export function SegmentsPanel({ result, activeVariant }: Props) {
       .map((f) => f.properties as Record<string, unknown>)
       .sort((a, b) => Number(b.calculated_flow_tph) - Number(a.calculated_flow_tph))
 
-    return { segments, reconstruction }
+    const depth = result.features
+      .filter((f) => f.properties?.object_type === 'depth_crossing' && match(f.properties ?? {}))
+      .map((f) => f.properties as Record<string, unknown>)
+
+    return { segments, reconstruction, depth }
   }, [result, activeVariant])
 
   if (!result) {
@@ -47,20 +51,32 @@ export function SegmentsPanel({ result, activeVariant }: Props) {
 
   return (
     <Section
-      title={tab === 'segments' ? 'Участки новой сети' : 'Реконструкция существующей сети'}
+      title={
+        tab === 'segments' ? 'Участки новой сети'
+          : tab === 'reconstruction' ? 'Реконструкция существующей сети'
+            : 'Пересечения по глубине'
+      }
       hint={
         tab === 'segments'
           ? 'Расход, условный диаметр, способ прокладки и стоимость'
-          : 'Участки, которым после подключения не хватает пропускной способности'
+          : tab === 'reconstruction'
+            ? 'Участки, которым после подключения не хватает пропускной способности'
+            : 'Где трасса проходит выше или ниже существующих коммуникаций'
       }
+      stackRight
       right={
-        <div className="flex gap-1">
+        <div className="flex flex-wrap gap-1">
           <TabButton active={tab === 'segments'} onClick={() => setTab('segments')}>
             Новые ({rows.segments.length})
           </TabButton>
           <TabButton active={tab === 'reconstruction'} onClick={() => setTab('reconstruction')}>
             Реконструкция ({rows.reconstruction.length})
           </TabButton>
+          {rows.depth.length > 0 && (
+            <TabButton active={tab === 'depth'} onClick={() => setTab('depth')}>
+              Глубина ({rows.depth.length})
+            </TabButton>
+          )}
         </div>
       }
     >
@@ -98,6 +114,40 @@ export function SegmentsPanel({ result, activeVariant }: Props) {
             </table>
           </div>
         )
+      ) : tab === 'depth' ? (
+        <div className="max-h-72 overflow-y-auto">
+          <table className="w-full text-[12px]">
+            <thead className="sticky top-0 bg-panel text-[11px] uppercase text-muted">
+              <tr>
+                <th className="py-1 pr-2 text-left font-medium">Участок</th>
+                <th className="py-1 pr-2 text-left font-medium">Объект</th>
+                <th className="py-1 pr-2 text-center font-medium">Проход</th>
+                <th className="py-1 pr-2 text-right font-medium">Глуб.</th>
+                <th className="py-1 text-right font-medium">Просвет</th>
+              </tr>
+            </thead>
+            <tbody className="font-mono">
+              {rows.depth.map((row) => (
+                <tr key={String(row.id)} className="border-t border-edge/60">
+                  <td className="py-1 pr-2 text-slate-300">{String(row.segment_id)}</td>
+                  <td className="py-1 pr-2 text-slate-400">
+                    {RESTRICTION_LABELS[String(row.utility_type)] ?? String(row.utility_type)}
+                  </td>
+                  <td className="py-1 text-center">
+                    <Badge tone={row.passage === 'above' ? 'info' : 'warn'}>
+                      {row.passage === 'above' ? 'сверху' : 'снизу'}
+                    </Badge>
+                  </td>
+                  <td className="py-1 pr-2 text-right text-accent">{String(row.new_depth)} м</td>
+                  <td className="py-1 text-right text-slate-200 whitespace-nowrap">
+                    {String(row.actual_clearance)}
+                    <span className="text-muted"> / {String(row.required_clearance)} м</span>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
       ) : rows.reconstruction.length === 0 ? (
         <Empty>Реконструкция существующей сети не требуется.</Empty>
       ) : (

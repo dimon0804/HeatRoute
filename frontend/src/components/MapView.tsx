@@ -142,6 +142,7 @@ const RESULT_LAYERS: { id: string; type: string }[] = [
   { id: 'new-chamber', type: 'heat_chamber' },
   { id: 'chamber-recon', type: 'heat_chamber_reconstruction' },
   { id: 'technical-node', type: 'technical_node' },
+  { id: 'depth-crossing', type: 'depth_crossing' },
 ]
 
 /** Показывать объекты только выбранного варианта; {@code null} — все сразу. */
@@ -335,6 +336,21 @@ function addResultLayers(map: MapLibreMap) {
       'circle-stroke-width': 1,
     },
   })
+
+  // Пересечения по глубине: дополнительная задача. Ромбовидная обводка отличает их
+  // от узлов сети — это не сооружение, а место, где трасса меняет глубину.
+  map.addLayer({
+    id: 'depth-crossing',
+    type: 'circle',
+    source: SOURCE_IDS.result,
+    filter: ['==', ['get', 'object_type'], 'depth_crossing'],
+    paint: {
+      'circle-radius': 6,
+      'circle-color': 'rgba(0,0,0,0)',
+      'circle-stroke-color': COLORS.depthCrossing,
+      'circle-stroke-width': 2,
+    },
+  })
 }
 
 /** Всплывающая карточка по щелчку: все атрибуты объекта так, как они уйдут в выгрузку. */
@@ -346,6 +362,7 @@ function attachPopups(map: MapLibreMap) {
     'new-chamber',
     'chamber-recon',
     'technical-node',
+    'depth-crossing',
     'existing-network',
     'existing-chamber',
     'oks-point',
@@ -406,6 +423,19 @@ function describe(props: Record<string, unknown>): string {
   if (props.end_node_id) add('Конечный узел', String(props.end_node_id))
   if (props.depth_start != null) add('Глубина в начале', `${props.depth_start} м`)
   if (props.depth_end != null) add('Глубина в конце', `${props.depth_end} м`)
+  if (props.utility_type) {
+    add('Пересекаемая коммуникация', RESTRICTION_LABELS[String(props.utility_type)]
+      ?? String(props.utility_type))
+  }
+  if (props.passage) {
+    add('Прохождение', props.passage === 'above' ? 'сверху' : 'снизу')
+  }
+  if (props.new_depth != null) add('Глубина новой сети', `${props.new_depth} м`)
+  if (props.utility_depth != null) add('Глубина коммуникации', `${props.utility_depth} м`)
+  if (props.actual_clearance != null) {
+    add('Вертикальный просвет',
+      `${props.actual_clearance} м при норме ${props.required_clearance} м`)
+  }
   if (props.cost != null) add('Стоимость', money(Number(props.cost)))
 
   return `<div class="hr-popup-body"><div class="hr-title">${title}</div>${rows.join('')}</div>`

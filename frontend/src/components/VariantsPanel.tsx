@@ -48,7 +48,8 @@ export function VariantsPanel({ job, activeVariant, onSelectVariant, onExport }:
       <Section
         title="Варианты подключения"
         hint="Чем меньше показатель S, тем выше вариант"
-        right={<Button variant="ghost" onClick={onExport}>Выгрузить GeoJSON</Button>}
+        stackRight
+        right={<Button variant="ghost" onClick={onExport}>Выгрузить результат в GeoJSON</Button>}
       >
         <div className="mb-3 flex items-center gap-2">
           <Button

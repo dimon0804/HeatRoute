@@ -46,8 +46,12 @@ public class VariantFeatureEntity {
     @Column(nullable = false)
     private int ordinal;
 
-    /** {@code null} у сводной записи варианта — она не пространственный объект. */
-    @Column(columnDefinition = "geometry(Geometry,4326)")
+    /**
+     * Геометрия в WGS 84; {@code null} у сводной записи варианта — она не является
+     * пространственным объектом. Размерность колонкой не ограничена: в режиме расчёта
+     * по глубине геометрия несёт Z-координаты, в плоской задаче — нет.
+     */
+    @Column(columnDefinition = "geometry")
     private Geometry geom;
 
     @Column(name = "properties_json", nullable = false, columnDefinition = "text")

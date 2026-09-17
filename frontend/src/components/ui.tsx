@@ -3,20 +3,30 @@ import type { ReactNode } from 'react'
 
 /** Мелкие элементы интерфейса, общие для всех панелей. */
 
-export function Section({ title, hint, children, right }: {
+export function Section({ title, hint, children, right, stackRight }: {
   title: string
   hint?: string
   right?: ReactNode
+  /**
+   * Разместить правый блок отдельной строкой под заголовком.
+   * Боковая панель узкая: набор вкладок рядом с длинным заголовком ломает и то,
+   * и другое на несколько строк.
+   */
+  stackRight?: boolean
   children: ReactNode
 }) {
   return (
     <section className="border-b border-edge">
-      <header className="flex items-baseline justify-between gap-3 px-4 pt-4 pb-2">
-        <div>
-          <h2 className="text-[13px] font-semibold uppercase tracking-wide text-muted">{title}</h2>
-          {hint && <p className="mt-0.5 text-[11px] text-muted/70">{hint}</p>}
+      <header className="px-4 pt-4 pb-2">
+        <div className={clsx('gap-3', stackRight ? 'block' : 'flex items-baseline justify-between')}>
+          <div className="min-w-0">
+            <h2 className="text-[13px] font-semibold uppercase tracking-wide text-muted">{title}</h2>
+            {hint && <p className="mt-0.5 text-[11px] leading-snug text-muted/70">{hint}</p>}
+          </div>
+          {right && (
+            <div className={clsx('shrink-0', stackRight && 'mt-2')}>{right}</div>
+          )}
         </div>
-        {right}
       </header>
       <div className="px-4 pb-4">{children}</div>
     </section>

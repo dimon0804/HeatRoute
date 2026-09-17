@@ -21,6 +21,7 @@ export const COLORS = {
   newChamber: '#4da3ff',
   chamberReconstruction: '#ffd23f',
   technicalNode: '#c9d6e4',
+  depthCrossing: '#a78bfa',
 } as const
 
 /**
@@ -84,4 +85,5 @@ export const LEGEND: LegendItem[] = [
   { color: COLORS.tieIn, label: 'Точка врезки', shape: 'circle', group: 'Новая сеть' },
   { color: COLORS.newChamber, label: 'Новая тепловая камера', shape: 'circle', group: 'Новая сеть' },
   { color: COLORS.technicalNode, label: 'Технический узел', shape: 'circle', group: 'Новая сеть' },
+  { color: COLORS.depthCrossing, label: 'Пересечение по глубине', shape: 'circle', group: 'Новая сеть' },
 ]

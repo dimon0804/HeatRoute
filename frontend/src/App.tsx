@@ -36,6 +36,7 @@ export default function App() {
   const [tab, setTab] = useState<Tab>('data')
   const [uploading, setUploading] = useState(false)
   const [basemap, setBasemap] = useState(false)
+  const [withDepth, setWithDepth] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [fitKey, setFitKey] = useState<string | null>(null)
 
@@ -108,12 +109,12 @@ export default function App() {
     setActiveVariant(null)
     setTab('variants')
     try {
-      const created = await api.submitJob(dataset.id)
+      const created = await api.submitJob(dataset.id, withDepth)
       setJob(created)
     } catch (e) {
       setError(e instanceof ApiError ? e.message : (e as Error).message)
     }
-  }, [dataset])
+  }, [dataset, withDepth])
 
   // --- опрос состояния расчёта ------------------------------------------------------------
   useEffect(() => {
@@ -163,6 +164,19 @@ export default function App() {
           {headline && (
             <span className="text-[12px] text-muted">{headline}</span>
           )}
+          <label
+            className="flex cursor-pointer items-center gap-1.5 text-[12px] text-muted"
+            title="Дополнительная задача кейса: подбор глубины участков, прохождение
+                   пересечений сверху или снизу, коэффициент стоимости по глубине"
+          >
+            <input
+              type="checkbox"
+              checked={withDepth}
+              onChange={(e) => setWithDepth(e.target.checked)}
+              className="accent-accent"
+            />
+            с учётом глубины
+          </label>
           <label className="flex cursor-pointer items-center gap-1.5 text-[12px] text-muted">
             <input
               type="checkbox"
