@@ -7,7 +7,7 @@ import ru.lct.heatroute.domain.reference.ReferenceProperties.RestrictionRow;
 
 /** Пространственное ограничение с уже разрешённым правилом учёта (таблица 5.1 ТП). */
 @Value
-@Builder
+@Builder(toBuilder = true)
 public class RestrictionObject {
 
     String id;
@@ -32,4 +32,11 @@ public class RestrictionObject {
 
     /** Адрес или иное описание из входных данных; используется только в отчётах. */
     String address;
+
+    /**
+     * ID перспективного ОКС, чьим собственным контуром опознан этот объект.
+     * {@code null} для обычного препятствия. Трасса этого ОКС проходит внутрь контура
+     * к своему ИТП без соблюдения клиренса; все прочие трассы обходят объект как обычно.
+     */
+    String ownerOksId;
 }

@@ -7,6 +7,7 @@ import org.locationtech.jts.geom.Geometry;
 import org.locationtech.jts.geom.LineString;
 import org.locationtech.jts.geom.MultiLineString;
 import org.locationtech.jts.geom.Point;
+import org.locationtech.jts.index.strtree.STRtree;
 import org.locationtech.jts.operation.distance.DistanceOp;
 import org.springframework.stereotype.Component;
 import ru.lct.heatroute.domain.model.ExistingChamber;
@@ -19,6 +20,7 @@ import ru.lct.heatroute.domain.model.InputScene;
 import ru.lct.heatroute.domain.model.ObjectType;
 import ru.lct.heatroute.domain.model.RestrictionObject;
 import ru.lct.heatroute.domain.reference.ReferenceCatalog;
+import ru.lct.heatroute.domain.reference.RestrictionRule;
 import ru.lct.heatroute.geo.Geo;
 
 import java.util.ArrayList;
@@ -112,6 +114,7 @@ public class SceneAssembler {
 
         List<FutureOks> future = buildFutureOks(c, segments, diag);
         List<RestrictionObject> restrictions = buildRestrictions(c, diag);
+        linkOwnFootprints(future, restrictions, diag);
 
         Envelope extent = new Envelope();
         segments.forEach(s -> extent.expandToInclude(s.getGeometry().getEnvelopeInternal()));
@@ -515,6 +518,92 @@ public class SceneAssembler {
                 RestrictionObject::getCanonicalType, LinkedHashMap::new, Collectors.counting()));
         diag.info("restriction.summary", "Ограничения по типам: " + byType);
         return out;
+    }
+
+    // =================================================================================
+    //  Собственные контуры перспективных ОКС
+    // =================================================================================
+
+    /**
+     * Опознание полигона, внутри которого лежит точка подключения, как собственного
+     * контура этого перспективного ОКС.
+     * <p>
+     * В конкурсном наборе все 17 точек подключения оказались внутри полигонов
+     * {@code restriction_type = oks} на 0,06–8,3 м от их границы: это контуры самих
+     * подключаемых зданий, а точка отмечает положение ИТП внутри. Без такого опознания
+     * собственное здание закрывает подход к своей же точке буфером в 5 м, и ни один
+     * маршрут до терминала не доходит.
+     * <p>
+     * Связь односторонняя: для трассы этого ОКС контур перестаёт быть препятствием,
+     * для всех прочих трасс он остаётся обычным зданием с полным клиренсом. Один полигон
+     * может принадлежать нескольким ОКС — в наборе есть здание с двумя точками подключения.
+     */
+    private void linkOwnFootprints(List<FutureOks> future,
+                                   List<RestrictionObject> restrictions,
+                                   IngestDiagnostics diag) {
+        if (future.isEmpty() || restrictions.isEmpty()) {
+            return;
+        }
+        STRtree index = new STRtree();
+        for (RestrictionObject r : restrictions) {
+            index.insert(r.getGeometry().getEnvelopeInternal(), r);
+        }
+        index.build();
+
+        Map<String, String> ownerByRestriction = new LinkedHashMap<>();
+        List<String> matched = new ArrayList<>();
+
+        for (int i = 0; i < future.size(); i++) {
+            FutureOks oks = future.get(i);
+            if (oks.getFootprint() != null) {
+                continue;   // контур пришёл полигоном oks_future — опознавать нечего
+            }
+            Point cp = oks.getConnectionPoint();
+            @SuppressWarnings("unchecked")
+            List<RestrictionObject> candidates = index.query(cp.getEnvelopeInternal());
+            RestrictionObject owner = candidates.stream()
+                    .filter(r -> r.getRule().getRule() == RestrictionRule.FORBIDDEN)
+                    .filter(r -> r.getGeometry().covers(cp))
+                    // Наименьший из накрывающих полигонов: точка внутри квартала и внутри
+                    // здания одновременно означает, что здание — искомый контур.
+                    .min(Comparator.comparingDouble(r -> r.getGeometry().getArea()))
+                    .orElse(null);
+            if (owner == null) {
+                continue;
+            }
+            future.set(i, oks.toBuilder()
+                    .footprint(owner.getGeometry())
+                    .footprintRestrictionId(owner.getId())
+                    .footprintSource(FutureOks.FootprintSource.RESTRICTION_MATCH)
+                    .build());
+            ownerByRestriction.put(owner.getId(), oks.getId());
+            matched.add(oks.getId() + "->" + owner.getId());
+        }
+
+        for (int i = 0; i < restrictions.size(); i++) {
+            String ownerOks = ownerByRestriction.get(restrictions.get(i).getId());
+            if (ownerOks != null) {
+                restrictions.set(i, restrictions.get(i).toBuilder().ownerOksId(ownerOks).build());
+            }
+        }
+
+        for (int i = 0; i < future.size(); i++) {
+            if (future.get(i).getFootprintSource() == null) {
+                future.set(i, future.get(i).toBuilder()
+                        .footprintSource(future.get(i).getFootprint() != null
+                                ? FutureOks.FootprintSource.OKS_FUTURE
+                                : FutureOks.FootprintSource.NONE)
+                        .build());
+            }
+        }
+
+        if (!matched.isEmpty()) {
+            diag.assumption("oks.footprintFromRestriction", String.format(
+                    "У %d перспективных ОКС точка подключения оказалась внутри полигона-ограничения; "
+                            + "этот полигон опознан как собственный контур объекта. Для трассы своего ОКС "
+                            + "он не является препятствием, для остальных трасс сохраняет полный клиренс",
+                    matched.size()), matched);
+        }
     }
 
     // =================================================================================

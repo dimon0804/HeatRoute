@@ -137,6 +137,30 @@ class SceneIngestTest {
     }
 
     @Test
+    @DisplayName("Полигон вокруг точки подключения опознан как собственный контур ОКС")
+    void linksOwnFootprints() throws Exception {
+        InputScene s = scene();
+
+        // Все 17 точек подключения лежат внутри полигонов-ограничений: это контуры
+        // самих подключаемых зданий. Без опознания собственное здание закрыло бы
+        // подход к своей же точке буфером в 5 м.
+        assertThat(s.getFutureOks())
+                .allMatch(o -> o.getFootprintSource() == FutureOks.FootprintSource.RESTRICTION_MATCH)
+                .allMatch(o -> o.getFootprint() != null)
+                .allMatch(o -> o.getFootprint().covers(o.getConnectionPoint()));
+
+        // Обратная связь проставлена ровно у опознанных ограничений и ни у каких других.
+        long owned = s.getRestrictions().stream()
+                .filter(r -> r.getOwnerOksId() != null)
+                .count();
+        // В наборе одно здание содержит две точки подключения, поэтому контуров 16, а не 17.
+        assertThat(owned).isEqualTo(16);
+        assertThat(s.getRestrictions())
+                .filteredOn(r -> r.getOwnerOksId() == null)
+                .hasSize(88 - 16);
+    }
+
+    @Test
     @DisplayName("Протокол разбора называет каждое принятое допущение")
     void reportsAssumptions() throws Exception {
         InputScene s = scene();
@@ -150,7 +174,8 @@ class SceneIngestTest {
                 "upstream.inferred",          // цепочка к источнику восстановлена
                 "segment.noFlow",             // расход существующей сети не передан
                 "chamber.diameterInferred",   // ДУ камер восстановлен
-                "oks.flowFromConnectionPoint" // расход ОКС взят с точки подключения
+                "oks.flowFromConnectionPoint", // расход ОКС взят с точки подключения
+                "oks.footprintFromRestriction" // контур ОКС опознан по ограничению
         );
     }
 }

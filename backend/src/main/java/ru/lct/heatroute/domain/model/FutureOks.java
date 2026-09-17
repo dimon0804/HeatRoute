@@ -14,7 +14,7 @@ import org.locationtech.jts.geom.Point;
  * берётся из того источника, который фактически есть, с пометкой в диагностике.
  */
 @Value
-@Builder
+@Builder(toBuilder = true)
 public class FutureOks {
 
     /** ID перспективного ОКС; при отсутствии полигона совпадает с ID точки подключения. */
@@ -22,6 +22,13 @@ public class FutureOks {
 
     /** Контур ОКС в рабочей проекции; {@code null}, если полигон во входе не передан. */
     Geometry footprint;
+
+    /**
+     * ID пространственного ограничения, опознанного как собственный контур этого ОКС.
+     * Для такого объекта клиренс на подходе именно этой трассы не применяется: труба
+     * заходит в здание к своему ИТП. Для чужих трасс он остаётся обычным препятствием.
+     */
+    String footprintRestrictionId;
 
     /** Точка подключения на границе ОКС (обязательна). */
     Point connectionPoint;
@@ -38,6 +45,9 @@ public class FutureOks {
     /** Откуда фактически взят расход — для диагностики. */
     FlowSource flowSource;
 
+    /** Откуда фактически взят контур — для диагностики. */
+    FootprintSource footprintSource;
+
     public enum FlowSource {
         /** Атрибут {@code flow_tph} полигона {@code oks_future} — штатный путь по ТП. */
         OKS_FUTURE,
@@ -45,5 +55,15 @@ public class FutureOks {
         CONNECTION_POINT,
         /** Расход не передан; принят ноль, объект отмечен в диагностике. */
         ASSUMED_ZERO
+    }
+
+    /** Откуда взят контур объекта. */
+    public enum FootprintSource {
+        /** Полигон {@code oks_future} из входных данных — штатный путь по ТП. */
+        OKS_FUTURE,
+        /** Полигон-ограничение, внутри которого оказалась точка подключения. */
+        RESTRICTION_MATCH,
+        /** Контур не найден; объект представлен только точкой подключения. */
+        NONE
     }
 }
