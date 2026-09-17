@@ -204,6 +204,38 @@ public class RouteTree {
         return false;
     }
 
+    /**
+     * Удаляет ветви, в которых нет ни одного подключаемого объекта.
+     * <p>
+     * Такие ветви появляются как побочный результат перестроений: путь к терминалу
+     * может выйти на уже построенную часть дерева, оставив позади отросток, который
+     * никуда не ведёт. Расход по нему нулевой, диаметр подбирается наименьший,
+     * но труба всё равно строится и стоит денег. В выгрузке это выглядит как ошибка
+     * проектирования, каковой и является.
+     *
+     * @return сколько узлов удалено
+     */
+    public int pruneEmptyBranches() {
+        int removed = 0;
+        boolean changed = true;
+        while (changed) {
+            changed = false;
+            for (Integer node : new ArrayList<>(parent.keySet())) {
+                if (terminalOks.containsKey(node) || !childrenOf(node).isEmpty()) {
+                    continue;
+                }
+                int p = parent.get(node);
+                children.getOrDefault(p, new ArrayList<>()).remove((Integer) node);
+                parent.remove(node);
+                children.remove(node);
+                syntheticNodes.remove(node);
+                removed++;
+                changed = true;
+            }
+        }
+        return removed;
+    }
+
     /** Все рёбра дерева в виде пар «родитель — потомок». */
     public List<int[]> edges() {
         List<int[]> out = new ArrayList<>(parent.size());

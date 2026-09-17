@@ -501,6 +501,13 @@ public class VariantPlanner {
         crossingRepair.repair(tree, graph, passable);
         tree.straighten(graph, routingProps.getMinTurnAngleDeg(), passable);
 
+        // Ветви без подключаемых объектов — побочный результат перестроений.
+        // Расход по ним нулевой, но труба строится и стоит денег.
+        int pruned = tree.pruneEmptyBranches();
+        if (pruned > 0) {
+            log.debug("Отсечено тупиковых узлов без потребителей: {}", pruned);
+        }
+
         // Врезка в существующую камеру не требует новой камеры; иначе камера строится
         // в точке врезки (раздел 8.2 ТП).
         String rootNodeId = candidate.isUsesExistingChamber()
