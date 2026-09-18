@@ -1,6 +1,7 @@
 import { useMemo, useState } from 'react'
 import { flow, meters, money, RESTRICTION_LABELS } from '../lib/format'
 import { Badge, Empty, Section } from './ui'
+import { DepthCrossSection } from './DepthCrossSection'
 
 interface Props {
   result: GeoJSON.FeatureCollection | null
@@ -45,6 +46,8 @@ export function SegmentsPanel({
     return { segments, reconstruction, depth }
   }, [result, activeVariant])
 
+  const selectedCrossing = rows.depth.find((row) => String(row.id) === selectedFeatureId)
+
   if (!result) {
     return (
       <Section title="Участки">
@@ -65,7 +68,7 @@ export function SegmentsPanel({
           ? 'Расход, условный диаметр, способ прокладки и стоимость. Щелчок по строке показывает участок на карте'
           : tab === 'reconstruction'
             ? 'Участки, которым после подключения не хватает пропускной способности'
-            : 'Где трасса проходит выше или ниже существующих коммуникаций'
+            : 'Где трасса проходит выше или ниже существующих коммуникаций. Щелчок по строке открывает разрез'
       }
       stackRight
       right={
@@ -169,6 +172,7 @@ export function SegmentsPanel({
               ))}
             </tbody>
           </table>
+          {selectedCrossing && <DepthCrossSection crossing={selectedCrossing} />}
         </div>
       ) : rows.reconstruction.length === 0 ? (
         <Empty>Реконструкция существующей сети не требуется.</Empty>
