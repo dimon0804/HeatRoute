@@ -10,6 +10,7 @@ import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Deque;
 import java.util.LinkedHashSet;
+import java.util.Map;
 import java.util.Set;
 
 /**
@@ -89,8 +90,8 @@ public class TreeImprover {
     }
 
     /** Условный диаметр ветви по расходу её поддерева. */
-    private int diameterOf(RouteTree tree, int node) {
-        double flow = tree.subtreeFlows().getOrDefault(node, FALLBACK_FLOW_TPH);
+    private int diameterOf(Map<Integer, Double> flows, int node) {
+        double flow = flows.getOrDefault(node, FALLBACK_FLOW_TPH);
         return catalog.selectForFlow(Math.max(flow, FALLBACK_FLOW_TPH))
                 .map(row -> row.getDn())
                 .orElse(catalog.largest().getDn());
@@ -98,6 +99,10 @@ public class TreeImprover {
 
     private double improveOnce(RouteTree tree, RoutingGraph graph,
                                SteinerTreeBuilder.Passability passable, int maxDegree) {
+        // Расходы поддеревьев считаются один раз на проход: они меняются только
+        // после принятого хода, а ход завершает проход.
+        Map<Integer, Double> flows = tree.subtreeFlows();
+
         for (int[] edge : new ArrayList<>(tree.edges())) {
             int parent = edge[0];
             int child = edge[1];
@@ -111,7 +116,7 @@ public class TreeImprover {
             Set<Integer> subtree = collectSubtree(tree, child);
             String exemptOks = tree.getTerminalOks().get(child);
 
-            int diameter = diameterOf(tree, child);
+            int diameter = diameterOf(flows, child);
             double costPerMeter = catalog.newCostPerM(diameter);
             // Врезка новой камеры окупается только сокращением отвода на эту величину.
             double chamberBreakEven = chamberBreakEvenMeters(diameter);
