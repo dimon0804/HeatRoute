@@ -231,13 +231,28 @@ public class VariantPlanner {
         List<SteinerTreeBuilder.Terminal> terminals = new ArrayList<>();
         Map<String, FutureOks> oksById = new LinkedHashMap<>();
         Map<String, String> terminalNodeIds = new LinkedHashMap<>();
+
+        // ОКС, для которого не нашлось узла в графе, — это объект, до которого маршрута
+        // нет вообще: его точка подключения оказалась вне досягаемости всех остальных
+        // узлов. Пропустить его молча нельзя: раздел 2.9 ТЗ требует сохранить
+        // построенную часть результата и назвать проблемные объекты поимённо,
+        // а исчезнувший из выдачи объект не заметят вовсе.
+        List<String> outsideGraph = new ArrayList<>();
+
         for (FutureOks oks : scene.getFutureOks()) {
             Integer idx = nodeByExternalId.get(oks.getId());
             oksById.put(oks.getId(), oks);
             terminalNodeIds.put(oks.getId(), oks.getConnectionPointId());
             if (idx != null) {
                 terminals.add(new SteinerTreeBuilder.Terminal(idx, oks.getId(), oks.getFlowTph()));
+            } else {
+                outsideGraph.add(oks.getId());
             }
+        }
+        if (!outsideGraph.isEmpty()) {
+            log.warn("Точка подключения вне графа маршрутизации у {} ОКС: {}. "
+                            + "Они пойдут в результат как неподключенные со штрафом",
+                    outsideGraph.size(), outsideGraph);
         }
 
         // --- 3. Разбиения ОКС ---------------------------------------------------------------
@@ -264,7 +279,7 @@ public class VariantPlanner {
             String variantId = "v" + (++variantCounter);
             CalculationVariant variant = buildVariant(scene, graph, field, located,
                     partition, oksById, terminalNodeIds, distanceFromTerminal,
-                    variantId, userZones, null);
+                    variantId, userZones, null, outsideGraph);
             partitionByVariant.put(variantId, partition);
             if (variant != null) {
                 produced.add(variant);
@@ -278,7 +293,7 @@ public class VariantPlanner {
         // форма дерева при той же точке врезки.
         variantCounter = addSeededVariants(produced, partitionByVariant, partitions, scene,
                 graph, field, located, oksById, terminalNodeIds, distanceFromTerminal,
-                variantCounter, userZones);
+                variantCounter, userZones, outsideGraph);
 
         Map<String, List<UtilityCrossing>> crossings = new LinkedHashMap<>();
         Map<String, List<String>> depthUnresolved = new LinkedHashMap<>();
@@ -295,7 +310,7 @@ public class VariantPlanner {
             // Профиль умеет сказать маршрутизации, где ей не хватило места.
             produced = relayUnfittingManoeuvres(produced, scene, graph, field, located,
                     partitionByVariant, oksById, terminalNodeIds, distanceFromTerminal,
-                    crossings, depthUnresolved, progress, userZones);
+                    crossings, depthUnresolved, progress, userZones, outsideGraph);
         }
 
         List<CalculationVariant> ranked = rank(produced, depthViolations(crossings));
@@ -324,12 +339,13 @@ public class VariantPlanner {
                                             Map<String, double[]> distanceFromTerminal,
                                             String variantId,
                                             RouteBarrier zones,
-                                            Integer forcedSeed) {
+                                            Integer forcedSeed,
+                                            List<String> outsideGraph) {
         List<NewSegment> segments = new ArrayList<>();
         List<NewChamberResult> chambers = new ArrayList<>();
         List<TechnicalNodeResult> nodes = new ArrayList<>();
         List<TieInResult> tieIns = new ArrayList<>();
-        List<String> unconnected = new ArrayList<>();
+        List<String> unconnected = new ArrayList<>(outsideGraph);
         Map<String, Integer> chamberMaxDn = new LinkedHashMap<>();
         NetworkMaterializer.IdSequence ids = new NetworkMaterializer.IdSequence(variantId);
         Set<String> tieInSignature = new LinkedHashSet<>();
@@ -443,6 +459,13 @@ public class VariantPlanner {
      * основная доля времени расчёта. Нижняя оценка — сумма расстояний в графе
      * от кандидата до терминалов группы — считается по уже готовой матрице
      * расстояний и отбирает те же места, что и полная проверка, но мгновенно.
+     * <p>
+     * Недостижимый терминал не отменяет кандидата. Сначала кандидаты сравниваются
+     * по числу терминалов, до которых от них вообще есть путь, и только потом
+     * по сумме расстояний до достижимых. Иначе один объект, к которому маршрута нет,
+     * обнулял бы все точки врезки группы, и вариант не строился бы вовсе — а раздел
+     * 2.9 ТЗ требует ровно обратного: сохранить построенную часть и назвать
+     * проблемный объект отдельно.
      */
     private List<TieInCandidate> shortlist(List<TieInCandidate> candidates,
                                            List<SteinerTreeBuilder.Terminal> group,
@@ -451,26 +474,35 @@ public class VariantPlanner {
         if (candidates.size() <= limit) {
             return candidates;
         }
-        List<TieInCandidate> sorted = new ArrayList<>(candidates);
+        Map<String, int[]> unreachable = new LinkedHashMap<>();
         Map<String, Double> estimate = new LinkedHashMap<>();
-        for (TieInCandidate candidate : sorted) {
+
+        for (TieInCandidate candidate : candidates) {
             double sum = 0;
-            boolean reachable = true;
+            int missed = 0;
             for (SteinerTreeBuilder.Terminal terminal : group) {
                 double[] distances = distanceFromTerminal.get(terminal.getOksId());
                 double d = distances == null
                         ? Double.POSITIVE_INFINITY : distances[candidate.getGraphNodeIndex()];
                 if (Double.isInfinite(d)) {
-                    reachable = false;
-                    break;
+                    missed++;
+                } else {
+                    sum += d;
                 }
-                sum += d;
             }
-            estimate.put(candidate.getId(), reachable ? sum : Double.POSITIVE_INFINITY);
+            unreachable.put(candidate.getId(), new int[]{missed});
+            estimate.put(candidate.getId(), sum);
         }
-        sorted.sort(Comparator.comparingDouble(c -> estimate.get(c.getId())));
+
+        List<TieInCandidate> sorted = new ArrayList<>(candidates);
+        sorted.sort(Comparator
+                .comparingInt((TieInCandidate c) -> unreachable.get(c.getId())[0])
+                .thenComparingDouble(c -> estimate.get(c.getId())));
+
+        // Кандидат, от которого не достижим ни один терминал группы, бесполезен —
+        // но только он один и отсеивается.
         return sorted.stream()
-                .filter(c -> !Double.isInfinite(estimate.get(c.getId())))
+                .filter(c -> unreachable.get(c.getId())[0] < group.size())
                 .limit(limit)
                 .collect(Collectors.toList());
     }
@@ -803,7 +835,8 @@ public class VariantPlanner {
             Map<String, List<UtilityCrossing>> crossings,
             Map<String, List<String>> depthUnresolved,
             Progress progress,
-            RouteBarrier userZones) {
+            RouteBarrier userZones,
+            List<String> outsideGraph) {
 
         List<CalculationVariant> out = new ArrayList<>(produced.size());
         int passes = Math.max(1, routingProps.getDepthRelayPasses());
@@ -828,7 +861,7 @@ public class VariantPlanner {
                 progress.report(0.96, "Перекладка трасс по результатам профиля");
                 CalculationVariant rebuilt = buildVariant(scene, graph, field, candidates,
                         partition, oksById, terminalNodeIds, distanceFromTerminal, variantId,
-                        userZones.plus(RouteBarrier.ofZones(zones)), null);
+                        userZones.plus(RouteBarrier.ofZones(zones)), null, outsideGraph);
                 if (rebuilt == null) {
                     // Зоны замкнули коридор: трассы в обход нет. Дальше запреты только
                     // строже, поэтому проходы прекращаются.
@@ -946,7 +979,8 @@ public class VariantPlanner {
                                   Map<String, String> terminalNodeIds,
                                   Map<String, double[]> distanceFromTerminal,
                                   int variantCounter,
-                                  RouteBarrier userZones) {
+                                  RouteBarrier userZones,
+                                  List<String> outsideGraph) {
         Set<String> bases = produced.stream()
                 .map(VariantPlanner::baseOf)
                 .collect(Collectors.toCollection(LinkedHashSet::new));
@@ -970,7 +1004,7 @@ public class VariantPlanner {
             String variantId = "v" + (++variantCounter);
             CalculationVariant seeded = buildVariant(scene, graph, field, candidates,
                     partitions.get(0), oksById, terminalNodeIds, distanceFromTerminal,
-                    variantId, userZones, seed);
+                    variantId, userZones, seed, outsideGraph);
             if (seeded == null
                     || seeded.getSummary().getUnconnectedOksIds().size() > bestUnconnected
                     || !seen.add(seeded.getStructureFingerprint())) {
