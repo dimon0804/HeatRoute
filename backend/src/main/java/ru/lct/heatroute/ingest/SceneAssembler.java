@@ -102,6 +102,50 @@ public class SceneAssembler {
     }
 
     public InputScene assemble(Collector c) {
+        return assemble(c, null, null);
+    }
+
+    /**
+     * Разбор с допущением о загрузке существующей сети, заданным на один расчёт.
+     * <p>
+     * Расхода существующих участков в конкурсном наборе нет, и принятое значение —
+     * самое влиятельное допущение всего решения: от него зависит, какие участки
+     * попадут под реконструкцию. Поэтому его должно быть можно проверить, не меняя
+     * конфигурацию сервиса: посчитать при нулевом расходе и при половине пропускной
+     * способности и сравнить объём реконструкции.
+     *
+     * @param mode     режим или {@code null}, чтобы взять из конфигурации
+     * @param fraction доля пропускной способности или {@code null} — из конфигурации
+     */
+    public InputScene assemble(Collector c, IngestProperties.ExistingFlowMode mode,
+                               Double fraction) {
+        // Допущение передаётся параметром, а не подменой настроек сервиса: расчёты
+        // идут в несколько потоков, и подмена общего бина означала бы, что два
+        // одновременных расчёта разберут набор с чужими допущениями.
+        return assembleWith(c, new ExistingFlowAssumption(
+                mode != null ? mode : props.getExistingFlowMode(),
+                fraction != null ? fraction : props.getExistingFlowCapacityFraction()));
+    }
+
+    /** Допущение о расходе существующей сети, действующее на один разбор. */
+    private static final class ExistingFlowAssumption {
+        private final IngestProperties.ExistingFlowMode mode;
+        private final double fraction;
+
+        private ExistingFlowAssumption(IngestProperties.ExistingFlowMode mode, double fraction) {
+            this.mode = mode;
+            this.fraction = fraction;
+        }
+
+        private String describe() {
+            return mode == IngestProperties.ExistingFlowMode.ZERO
+                    ? "существующий расход равен нулю"
+                    : String.format("существующий расход равен %.0f%% пропускной способности ДУ",
+                    fraction * 100);
+        }
+    }
+
+    private InputScene assembleWith(Collector c, ExistingFlowAssumption assumption) {
         IngestDiagnostics diag = new IngestDiagnostics();
         catalog.resetUnknownTypes();
         diag.info("input.read", String.format(
@@ -117,7 +161,7 @@ public class SceneAssembler {
         }
 
         HeatSource source = buildSource(c, diag);
-        List<ExistingSegment> segments = buildSegments(c, diag);
+        List<ExistingSegment> segments = buildSegments(c, diag, assumption);
         List<ExistingChamber> chambers = buildChambers(c, diag);
 
         ExistingTopology topology = topologyResolver.resolve(segments, chambers, source, diag);
@@ -184,7 +228,8 @@ public class SceneAssembler {
     //  Существующая сеть
     // =================================================================================
 
-    private List<ExistingSegment> buildSegments(Collector c, IngestDiagnostics diag) {
+    private List<ExistingSegment> buildSegments(Collector c, IngestDiagnostics diag,
+                                               ExistingFlowAssumption assumption) {
         List<ExistingSegment> out = new ArrayList<>(c.networks.size());
         List<String> noFlow = new ArrayList<>();
         List<String> noDiameter = new ArrayList<>();
@@ -214,7 +259,7 @@ public class SceneAssembler {
                 flowValue = flow.get();
             } else {
                 noFlow.add(id);
-                flowValue = assumedExistingFlow(dn);
+                flowValue = assumedExistingFlow(dn, assumption);
             }
 
             for (int i = 0; i < parts.size(); i++) {
@@ -248,18 +293,14 @@ public class SceneAssembler {
             diag.assumption("segment.noFlow", String.format(
                     "У %d участков существующей сети нет атрибута flow_tph. Принят режим %s: "
                             + "%s. Объём реконструкции рассчитан исходя из этого допущения",
-                    noFlow.size(), props.getExistingFlowMode(),
-                    props.getExistingFlowMode() == IngestProperties.ExistingFlowMode.ZERO
-                            ? "существующий расход равен нулю"
-                            : String.format("существующий расход равен %.0f%% пропускной способности ДУ",
-                            props.getExistingFlowCapacityFraction() * 100)), noFlow);
+                    noFlow.size(), assumption.mode, assumption.describe()), noFlow);
         }
         return out;
     }
 
-    private double assumedExistingFlow(int dn) {
-        if (props.getExistingFlowMode() == IngestProperties.ExistingFlowMode.CAPACITY_FRACTION) {
-            return catalog.byDnOrNextUp(dn).getCapacityTph() * props.getExistingFlowCapacityFraction();
+    private double assumedExistingFlow(int dn, ExistingFlowAssumption assumption) {
+        if (assumption.mode == IngestProperties.ExistingFlowMode.CAPACITY_FRACTION) {
+            return catalog.byDnOrNextUp(dn).getCapacityTph() * assumption.fraction;
         }
         return 0d;
     }

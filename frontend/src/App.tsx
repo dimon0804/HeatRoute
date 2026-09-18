@@ -38,6 +38,7 @@ export default function App() {
   const [uploading, setUploading] = useState(false)
   const [basemap, setBasemap] = useState(false)
   const [withDepth, setWithDepth] = useState(false)
+  const [networkLoaded, setNetworkLoaded] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [fitKey, setFitKey] = useState<string | null>(null)
   const [selectedFeatureId, setSelectedFeatureId] = useState<string | null>(null)
@@ -126,12 +127,12 @@ export default function App() {
     setSelectedFeatureId(null)
     setTab('variants')
     try {
-      const created = await api.submitJob(dataset.id, withDepth, zones)
+      const created = await api.submitJob(dataset.id, withDepth, zones, networkLoaded)
       setJob(created)
     } catch (e) {
       setError(e instanceof ApiError ? e.message : (e as Error).message)
     }
-  }, [dataset, withDepth, zones])
+  }, [dataset, withDepth, zones, networkLoaded])
 
   // --- запретные зоны ---------------------------------------------------------------------
   const handlePlaceZone = useCallback((lon: number, lat: number) => {
@@ -198,6 +199,20 @@ export default function App() {
               className="accent-accent"
             />
             с учётом глубины
+          </label>
+          <label
+            className="flex cursor-pointer items-center gap-1.5 text-[12px] text-muted"
+            title="Расхода существующей сети во входных данных нет, и по умолчанию он принят
+                   нулевым. Здесь он принимается равным половине пропускной способности —
+                   так видно, во что обходится это допущение по объёму реконструкции"
+          >
+            <input
+              type="checkbox"
+              checked={networkLoaded}
+              onChange={(e) => setNetworkLoaded(e.target.checked)}
+              className="accent-accent"
+            />
+            сеть загружена
           </label>
           <label className="flex cursor-pointer items-center gap-1.5 text-[12px] text-muted">
             <input

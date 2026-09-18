@@ -77,11 +77,19 @@ export const api = {
     datasetId: string,
     withDepth = false,
     forbiddenZones: ForbiddenZone[] = [],
+    /** Существующая сеть уже несёт расход: принимается доля пропускной способности. */
+    existingNetworkLoaded = false,
   ): Promise<Job> {
     return request<Job>('/v1/jobs', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ datasetId, withDepth, forbiddenZones }),
+      body: JSON.stringify({
+        datasetId,
+        withDepth,
+        forbiddenZones,
+        existingFlowMode: existingNetworkLoaded ? 'CAPACITY_FRACTION' : 'ZERO',
+        existingFlowFraction: existingNetworkLoaded ? 0.5 : null,
+      }),
     })
   },
 

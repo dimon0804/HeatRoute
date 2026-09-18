@@ -113,13 +113,23 @@ public class DatasetService {
      * потоковый и стоит секунды.
      */
     public InputScene parse(DatasetEntity entity) {
+        return parse(entity, null, null);
+    }
+
+    /**
+     * Разбор с допущением о загрузке существующей сети, заданным на один расчёт.
+     * {@code null} в обоих параметрах означает «как настроено в сервисе».
+     */
+    public InputScene parse(DatasetEntity entity,
+                            ru.lct.heatroute.ingest.IngestProperties.ExistingFlowMode mode,
+                            Double fraction) {
         SceneAssembler.Collector collector = new SceneAssembler.Collector();
         try (InputStream in = storage.open(entity.getStoredPath())) {
             parser.parse(in, collector::accept);
         } catch (IOException e) {
             throw new UncheckedIOException("Не удалось прочитать файл набора", e);
         }
-        return assembler.assemble(collector);
+        return assembler.assemble(collector, mode, fraction);
     }
 
     @Transactional(readOnly = true)
