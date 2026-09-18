@@ -63,6 +63,8 @@ export interface VariantSummary {
   length: number
   score: number
   unconnectedOksIds: string[]
+  /** Почему каждый объект остался без подключения: идентификатор → причина. */
+  unconnectedReasons?: Record<string, string>
 }
 
 export interface Variant {

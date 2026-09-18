@@ -111,11 +111,19 @@ export function VariantsPanel({
                 <p className="mb-1 text-[11px] uppercase tracking-wide text-muted">
                   Вариант № {v.summary.rank}
                 </p>
-                <div className="flex flex-wrap gap-1">
+                <ul className="space-y-1.5">
                   {v.summary.unconnectedOksIds.map((id) => (
-                    <Badge key={id} tone="bad">{id}</Badge>
+                    <li key={id} className="rounded-md bg-ink/60 px-2.5 py-1.5">
+                      <Badge tone="bad">{id}</Badge>
+                      {/* Список идентификаторов без объяснения бесполезен: раздел 2.9
+                          требует обработать случай, а обработать — значит сказать,
+                          что именно с объектом не так. */}
+                      <p className="mt-1 text-[11.5px] leading-snug text-muted">
+                        {v.summary.unconnectedReasons?.[id] ?? 'Причина не определена'}
+                      </p>
+                    </li>
                   ))}
-                </div>
+                </ul>
                 <Row label="Штраф" value={money(v.summary.unconnectedPenalty)} mono />
               </div>
             ))}

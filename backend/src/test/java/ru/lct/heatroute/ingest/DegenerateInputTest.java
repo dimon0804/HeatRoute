@@ -206,6 +206,19 @@ class DegenerateInputTest {
         assertThat(best.getSegments())
                 .as("остальная сеть построена")
                 .isNotEmpty();
+
+        // Список идентификаторов без объяснения бесполезен: раздел 2.9 требует
+        // обработать случай, а обработать — значит сказать, что с объектом не так.
+        assertThat(best.getSummary().getUnconnectedReasons())
+                .as("у каждого неподключенного объекта есть причина")
+                .containsKey("4");
+        assertThat(best.getSummary().getUnconnectedReasons().get("4"))
+                .as("причина написана по-русски и объясняет, а не кодирует")
+                .isNotBlank()
+                .hasSizeGreaterThan(20);
+
+        System.out.printf("%nОКС 4 не подключён: %s%n%n",
+                best.getSummary().getUnconnectedReasons().get("4"));
     }
 
     @Test

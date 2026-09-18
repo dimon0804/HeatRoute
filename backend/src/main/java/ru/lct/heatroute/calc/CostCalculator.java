@@ -38,6 +38,20 @@ public class CostCalculator {
                                     Collection<ChamberReconstructionResult> chamberReconstructions,
                                     List<String> unconnectedOksIds,
                                     Map<String, FutureOks> oksById) {
+        return summarize(variantId, segments, chambers, tieIns, reconstructions,
+                chamberReconstructions, unconnectedOksIds, Map.of(), oksById);
+    }
+
+    /** То же, с объяснением, почему каждый ОКС остался без подключения. */
+    public VariantSummary summarize(String variantId,
+                                    Collection<NewSegment> segments,
+                                    Collection<NewChamberResult> chambers,
+                                    Collection<TieInResult> tieIns,
+                                    Collection<ReconstructionResult> reconstructions,
+                                    Collection<ChamberReconstructionResult> chamberReconstructions,
+                                    List<String> unconnectedOksIds,
+                                    Map<String, String> unconnectedReasons,
+                                    Map<String, FutureOks> oksById) {
         double construction = segments.stream().mapToDouble(NewSegment::getCost).sum();
         double chamberConstruction = chambers.stream().mapToDouble(NewChamberResult::getCost).sum();
         double tieInCost = tieIns.stream().mapToDouble(TieInResult::getCost).sum();
@@ -77,6 +91,7 @@ public class CostCalculator {
                 .length(round2(length))
                 .score(round3(catalog.score(total, length)))
                 .unconnectedOksIds(List.copyOf(unconnectedOksIds))
+                .unconnectedReasons(Map.copyOf(unconnectedReasons))
                 .build();
     }
 

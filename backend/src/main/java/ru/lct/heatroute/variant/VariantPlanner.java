@@ -74,6 +74,24 @@ public class VariantPlanner {
     /** Раздел 2.11 ТЗ: содержательно отличающихся вариантов не больше трёх. */
     private static final int MAX_VARIANTS = 3;
 
+    /**
+     * Почему объект остаётся без подключения. Раздел 2.9 ТЗ требует обработать такой
+     * случай, а обработать — значит не только назвать объект, но и сказать, что с ним
+     * не так: без этого список идентификаторов бесполезен.
+     */
+    private static final String REASON_OUTSIDE_GRAPH =
+            "Точка подключения недостижима: от неё нет ни одного допустимого отрезка "
+                    + "до остальной обстановки — её со всех сторон закрывают ограничения";
+    private static final String REASON_NO_ROUTE =
+            "Маршрут не найден: все пути от точек врезки перекрыты пространственными "
+                    + "ограничениями";
+    private static final String REASON_NO_TIE_IN =
+            "Не нашлось допустимой точки врезки: к ним нет пути либо у всех исчерпан "
+                    + "предел примыканий";
+    private static final String REASON_OVER_CAPACITY =
+            "Расход превышает пропускную способность наибольшего условного диаметра "
+                    + "справочника (таблица 4.1)";
+
     public VariantPlanner(ReferenceCatalog catalog,
                           GeoProperties geoProps,
                           RoutingProperties routingProps,
@@ -345,6 +363,9 @@ public class VariantPlanner {
         List<NewChamberResult> chambers = new ArrayList<>();
         List<TechnicalNodeResult> nodes = new ArrayList<>();
         List<TieInResult> tieIns = new ArrayList<>();
+        // Причина известна ровно там, где объект выбывает; дальше её остаётся донести.
+        Map<String, String> unconnectedReasons = new LinkedHashMap<>();
+        outsideGraph.forEach(id -> unconnectedReasons.put(id, REASON_OUTSIDE_GRAPH));
         List<String> unconnected = new ArrayList<>(outsideGraph);
         Map<String, Integer> chamberMaxDn = new LinkedHashMap<>();
         NetworkMaterializer.IdSequence ids = new NetworkMaterializer.IdSequence(variantId);
@@ -392,7 +413,10 @@ public class VariantPlanner {
                 }
             }
             if (best == null) {
-                group.forEach(t -> unconnected.add(t.getOksId()));
+                group.forEach(t -> {
+                    unconnected.add(t.getOksId());
+                    unconnectedReasons.put(t.getOksId(), REASON_NO_TIE_IN);
+                });
                 continue;
             }
             consumedAtNode.merge(best.getRootGraphNode(), best.getRootBranches(), Integer::sum);
@@ -401,6 +425,7 @@ public class VariantPlanner {
             nodes.addAll(best.getTechnicalNodes());
             tieIns.add(best.getTieIn());
             unconnected.addAll(best.getUnconnected());
+            unconnectedReasons.putAll(best.getUnconnectedReasons());
             chamberMaxDn.putAll(best.getChamberMaxDn());
             tieInSignature.add(best.getTieIn().getExistingObjectId() + "@"
                     + Math.round(best.getTieIn().getPositionFraction() * 100));
@@ -425,7 +450,8 @@ public class VariantPlanner {
                 reconstruction.compute(scene, tieIns, chamberMaxDn, variantId);
 
         VariantSummary summary = costCalculator.summarize(variantId, segments, chambers,
-                tieIns, recon.getSegments(), recon.getChambers(), unconnected, oksById);
+                tieIns, recon.getSegments(), recon.getChambers(), unconnected,
+                unconnectedReasons, oksById);
 
         // Отпечаток двухуровневый. Основная часть — точки врезки и разбиение ОКС:
         // по разделу 2.8 ТЗ именно они делают решения содержательно разными. Хвост —
@@ -569,6 +595,8 @@ public class VariantPlanner {
         List<TechnicalNodeResult> technicalNodes;
         TieInResult tieIn;
         List<String> unconnected;
+        /** Почему именно эти объекты остались без подключения. */
+        Map<String, String> unconnectedReasons;
         Map<String, Integer> chamberMaxDn;
         double score;
         /** Узел графа, в котором выполнена врезка. */
@@ -737,6 +765,10 @@ public class VariantPlanner {
         List<String> unconnected = new ArrayList<>(built.getUnreachableOks());
         unconnected.addAll(m.getOverCapacityOks());
 
+        Map<String, String> reasons = new LinkedHashMap<>();
+        built.getUnreachableOks().forEach(id -> reasons.put(id, REASON_NO_ROUTE));
+        m.getOverCapacityOks().forEach(id -> reasons.put(id, REASON_OVER_CAPACITY));
+
         // Быстрая оценка для отбора кандидата врезки: полная стоимость части
         // вместе с реконструкцией существующей сети именно от этой точки.
         ReconstructionCalculator.Result recon = reconstruction.compute(scene,
@@ -745,7 +777,7 @@ public class VariantPlanner {
                 List.of(tieIn), recon.getSegments(), recon.getChambers(), unconnected, oksById);
 
         return new GroupResult(m.getSegments(), chambers, m.getTechnicalNodes(), tieIn,
-                unconnected, chamberMaxDn, partial.getScore(),
+                unconnected, reasons, chamberMaxDn, partial.getScore(),
                 candidate.getGraphNodeIndex(),
                 built.getTree().childrenOf(candidate.getGraphNodeIndex()).size(),
                 countCrossings(m.getSegments(), acceptedSegments));
@@ -794,7 +826,8 @@ public class VariantPlanner {
         updated = updated.withSummary(costCalculator.summarize(
                 updated.getVariantId(), updated.getSegments(), updated.getChambers(),
                 updated.getTieIns(), updated.getReconstructions(),
-                updated.getChamberReconstructions(), unconnected, oksById));
+                updated.getChamberReconstructions(), unconnected,
+                variant.getSummary().getUnconnectedReasons(), oksById));
         crossings.put(updated.getVariantId(), depth.getCrossings());
         depthUnresolved.put(updated.getVariantId(), depth.getUnresolved());
         return updated;

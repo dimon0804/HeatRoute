@@ -5,6 +5,7 @@ import lombok.Builder;
 import lombok.Value;
 
 import java.util.List;
+import java.util.Map;
 
 /** Сводная запись варианта — состав раздела 10.7 ТП. */
 @Value
@@ -50,4 +51,7 @@ public class VariantSummaryDto {
 
     @Schema(description = "ID перспективных ОКС, для которых маршрут не найден автоматически")
     List<String> unconnectedOksIds;
+
+    @Schema(description = "Почему каждый ОКС остался без подключения: идентификатор → причина")
+    Map<String, String> unconnectedReasons;
 }
