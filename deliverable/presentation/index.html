@@ -1,0 +1,708 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>HeatRoute — моделирование трасс подключения к тепловым сетям</title>
+<!--
+  Презентация к защите. Содержание — docs/07_ПРЕЗЕНТАЦИЯ.md, числа сверены
+  с работающим сервисом.
+
+  Сделана одним файлом и без единой внешней ссылки сознательно: в зале защиты
+  может не быть интернета, а презентация, которая не открылась, хуже отсутствующей.
+  Шрифты системные, изображения лежат рядом, скриптов ровно столько, сколько нужно
+  для перелистывания.
+
+  Показ:  открыть в браузере, листать стрелками, пробелом или колесом.
+  Печать: Ctrl+P → «Сохранить как PDF», альбомная ориентация, поля «нет»,
+          фоновая графика включена — получится PDF по слайду на страницу.
+-->
+<style>
+  :root {
+    --ink: #0b1118;
+    --panel: #111a24;
+    --edge: #1e2a38;
+    --text: #e8eef5;
+    --muted: #8da2b8;
+    --accent: #ff8a3d;
+    --blue: #4da3ff;
+    --green: #3ddc97;
+    --red: #ff4d6d;
+    --yellow: #ffd23f;
+  }
+
+  * { box-sizing: border-box; }
+
+  html, body {
+    margin: 0;
+    padding: 0;
+    background: #05090d;
+    color: var(--text);
+    font-family: "Segoe UI", "Helvetica Neue", Arial, sans-serif;
+    font-size: 16px;
+    line-height: 1.45;
+  }
+
+  /* Слайд — лист 16:9. Размер в миллиметрах, чтобы печать совпадала с экраном. */
+  .slide {
+    position: relative;
+    width: 297mm;
+    height: 167mm;
+    margin: 6mm auto;
+    padding: 14mm 16mm 12mm;
+    background: var(--ink);
+    border: 1px solid var(--edge);
+    border-radius: 3mm;
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+  }
+
+  .num {
+    position: absolute;
+    right: 12mm;
+    bottom: 8mm;
+    font-size: 10pt;
+    color: var(--muted);
+    font-variant-numeric: tabular-nums;
+  }
+
+  .kicker {
+    font-size: 10.5pt;
+    letter-spacing: .12em;
+    text-transform: uppercase;
+    color: var(--accent);
+    margin-bottom: 4mm;
+  }
+
+  h1 {
+    font-size: 34pt;
+    line-height: 1.05;
+    margin: 0 0 6mm;
+    font-weight: 650;
+    letter-spacing: -.01em;
+  }
+
+  h2 {
+    font-size: 22pt;
+    line-height: 1.15;
+    margin: 0 0 7mm;
+    font-weight: 620;
+    letter-spacing: -.01em;
+  }
+
+  .lead {
+    font-size: 15pt;
+    line-height: 1.4;
+    color: var(--text);
+    margin: 0 0 6mm;
+    max-width: 62ch;
+  }
+
+  .lead strong { color: var(--accent); }
+
+  p, li { font-size: 12.5pt; }
+  p { margin: 0 0 4mm; max-width: 72ch; }
+
+  ul { margin: 0 0 5mm; padding-left: 6mm; }
+  li { margin-bottom: 2.5mm; max-width: 70ch; }
+
+  .quote {
+    border-left: 3px solid var(--accent);
+    padding: 1mm 0 1mm 6mm;
+    margin: 0 0 6mm;
+    font-size: 13pt;
+    color: var(--text);
+    max-width: 68ch;
+  }
+
+  .muted { color: var(--muted); }
+
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 11.5pt;
+    margin-bottom: 5mm;
+  }
+  th, td {
+    text-align: left;
+    padding: 2.4mm 3mm;
+    border-bottom: 1px solid var(--edge);
+    vertical-align: top;
+  }
+  th {
+    color: var(--muted);
+    font-weight: 500;
+    font-size: 10.5pt;
+    text-transform: uppercase;
+    letter-spacing: .06em;
+  }
+  td.num-cell, th.num-cell { text-align: right; font-variant-numeric: tabular-nums; }
+  tr.accent td { color: var(--accent); font-weight: 600; }
+
+  .cols { display: flex; gap: 10mm; flex: 1; min-height: 0; }
+  .cols > * { flex: 1; min-width: 0; }
+
+  .metrics {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 5mm;
+    margin-bottom: 6mm;
+  }
+  .metric {
+    background: var(--panel);
+    border: 1px solid var(--edge);
+    border-radius: 2mm;
+    padding: 5mm;
+  }
+  .metric .value {
+    font-size: 24pt;
+    font-weight: 650;
+    line-height: 1.1;
+    font-variant-numeric: tabular-nums;
+  }
+  .metric .value.accent { color: var(--accent); }
+  .metric .label {
+    font-size: 10.5pt;
+    color: var(--muted);
+    margin-top: 1.5mm;
+  }
+
+  figure { margin: 0; }
+  figure img {
+    width: 100%;
+    border: 1px solid var(--edge);
+    border-radius: 2mm;
+    display: block;
+  }
+  figcaption {
+    font-size: 10pt;
+    color: var(--muted);
+    margin-top: 2mm;
+  }
+
+  .cover {
+    justify-content: center;
+    background:
+      linear-gradient(90deg, rgba(11,17,24,.97) 38%, rgba(11,17,24,.55) 70%,
+        rgba(11,17,24,.35) 100%),
+      url("map-result.png") right center / cover no-repeat,
+      var(--ink);
+  }
+  /* Текст поверх карты-фона; номер слайда остаётся там же, где на прочих. */
+  .cover > *:not(.num) { position: relative; }
+  .cover h1 { font-size: 44pt; margin-bottom: 4mm; }
+  .cover .sub { font-size: 16pt; color: var(--muted); max-width: 60ch; }
+  .cover .meta { margin-top: 12mm; font-size: 12pt; color: var(--muted); }
+
+  code {
+    font-family: "Cascadia Mono", Consolas, "Courier New", monospace;
+    font-size: 11pt;
+    background: var(--panel);
+    padding: .5mm 1.5mm;
+    border-radius: 1mm;
+  }
+
+  .pill {
+    display: inline-block;
+    padding: 1mm 3mm;
+    border-radius: 10mm;
+    font-size: 10.5pt;
+    border: 1px solid var(--edge);
+    color: var(--muted);
+    margin-right: 2mm;
+  }
+  .pill.good { color: var(--green); border-color: rgba(61,220,151,.35); }
+  .pill.bad { color: var(--red); border-color: rgba(255,77,109,.35); }
+
+  /* Схемы рисуются разметкой, а не картинками: так они читаются на любом экране
+     и не зависят от того, чем открыли файл. */
+  .diagram {
+    background: var(--panel);
+    border: 1px solid var(--edge);
+    border-radius: 2mm;
+    padding: 5mm;
+  }
+
+  .hint {
+    position: fixed;
+    left: 50%;
+    bottom: 4mm;
+    transform: translateX(-50%);
+    font-size: 10pt;
+    color: var(--muted);
+    background: rgba(5,9,13,.85);
+    border: 1px solid var(--edge);
+    border-radius: 10mm;
+    padding: 1.5mm 5mm;
+  }
+
+  @media print {
+    html, body { background: #fff; }
+    .slide {
+      margin: 0;
+      border: none;
+      border-radius: 0;
+      page-break-after: always;
+      break-after: page;
+      width: 297mm;
+      height: 210mm;
+      padding: 18mm 18mm 14mm;
+    }
+    .hint { display: none; }
+    @page { size: A4 landscape; margin: 0; }
+  }
+</style>
+</head>
+<body>
+
+<!-- 1 -->
+<section class="slide cover">
+  <div class="kicker">Лидеры цифровой трансформации · 2026</div>
+  <h1>HeatRoute</h1>
+  <div class="sub">Сервис моделирования трасс подключения перспективных объектов
+    капитального строительства к тепловым сетям</div>
+  <div class="meta">Кейс Департамента информационных технологий города Москвы</div>
+  <div class="num">1</div>
+</section>
+
+<!-- 2 -->
+<section class="slide">
+  <div class="kicker">Задача</div>
+  <h2>Подключить 17 зданий к существующей сети</h2>
+  <p class="lead">Выбрать места врезки, проложить трассы, подобрать диаметры,
+    определить, что придётся реконструировать, и сравнить варианты.</p>
+  <div class="metrics">
+    <div class="metric">
+      <div class="value">недели</div>
+      <div class="label">ручной работы проектировщика</div>
+    </div>
+    <div class="metric">
+      <div class="value accent">22 с</div>
+      <div class="label">полный расчёт с тремя вариантами</div>
+    </div>
+    <div class="metric">
+      <div class="value">17 из 17</div>
+      <div class="label">объектов подключено</div>
+    </div>
+  </div>
+  <figure style="flex:1; min-height:0; display:flex; flex-direction:column">
+    <img src="map-result.png" alt="Построенная сеть на конкурсном наборе"
+         style="flex:1; min-height:0; object-fit:cover; object-position:center 42%">
+    <figcaption>Результат расчёта: три независимые части сети, 12 камер,
+      3 врезки в существующую сеть, реконструкция 59,9 м (жёлтый пунктир)</figcaption>
+  </figure>
+  <div class="num">2</div>
+</section>
+
+<!-- 3 -->
+<section class="slide">
+  <div class="kicker">Данные</div>
+  <h2>Что мы нашли в наборе за первый час</h2>
+  <table>
+    <tr>
+      <th style="width:44%">Находка</th>
+      <th>Следствие для решения</th>
+    </tr>
+    <tr>
+      <td>Набор беднее технического приложения: нет направления к источнику,
+        расхода сети, полигонов ОКС, диаметров камер</td>
+      <td>Разбор обязан <strong>восстанавливать</strong> данные и записывать
+        каждое допущение — молча подставлять числа нельзя</td>
+    </tr>
+    <tr>
+      <td>Все 17 точек подключения лежат <strong>внутри</strong> зданий,
+        в 0,06–8,3 м от границы</td>
+      <td>Это контуры самих подключаемых объектов. Считать их препятствием —
+        значит закрыть подход к своей же точке буфером в 5 м</td>
+    </tr>
+    <tr>
+      <td>Типы ограничений <code>oks</code> и <code>railway</code> отсутствуют
+        в таблице 5.1 дословно</td>
+      <td>Сопоставление типов должно быть данными, а не условием в коде</td>
+    </tr>
+  </table>
+  <div class="quote">Проверять будут на другом наборе. Поэтому решение читает
+    и бедный набор, и полный — одним и тем же кодом.</div>
+  <div class="num">3</div>
+</section>
+
+<!-- 4 -->
+<section class="slide">
+  <div class="kicker">Маршрутизация</div>
+  <h2>Граф видимости, а не сетка</h2>
+  <div class="cols">
+    <div>
+      <ul>
+        <li>Каждое препятствие расширяется на своё минимальное расстояние
+          плюс половину ширины пары труб.</li>
+        <li>Узлы графа — <strong>выпуклые углы</strong> расширенных препятствий:
+          кратчайший путь в плоскости меняет направление только на них.</li>
+        <li>Ребро есть, если между двумя углами проходит прямая, не заходящая
+          в запретную зону.</li>
+      </ul>
+      <div class="quote">Трасса получается из прямых отрезков, огибающих
+        препятствия по касательной. Ровно так её рисует инженер.</div>
+      <p class="muted">Сеточный поиск при любом шаге даёт лесенку, а её сглаживание
+        рискует нарушить только что соблюдённый клиренс.</p>
+    </div>
+    <div class="diagram">
+      <table>
+        <tr><th colspan="2">Граф на конкурсном наборе</th></tr>
+        <tr><td>Узлов</td><td class="num-cell">3 544</td></tr>
+        <tr><td>Рёбер</td><td class="num-cell">123 007</td></tr>
+        <tr><td>Проверено пар узлов</td><td class="num-cell">1 257 083</td></tr>
+        <tr><td>Принято рёбер</td><td class="num-cell">9 %</td></tr>
+        <tr><td>Построение</td><td class="num-cell">9 с в 16 потоков</td></tr>
+      </table>
+      <p class="muted" style="margin:0">Радиусы видимости раздельные: 300 м между
+        препятствиями и 2000 м от подключаемых объектов. Иначе граф растёт
+        квадратично и перестаёт помещаться во время.</p>
+    </div>
+  </div>
+  <div class="num">4</div>
+</section>
+
+<!-- 5 -->
+<section class="slide">
+  <div class="kicker">Совместное подключение</div>
+  <h2>Кого подключать вместе</h2>
+  <div class="quote" style="margin-bottom:4mm">Семнадцать отдельных врезок — это
+    85 млн рублей только за врезки. Совместное подключение почти всегда выгоднее.
+    Почти.</div>
+  <ul>
+    <li>Кластеризация по расстоянию <strong>в графе</strong>, а не по прямой:
+      два здания через реку геометрически рядом, а по трассе далеко.</li>
+    <li>Разбиения от «все одной сетью» до трёх частей; побеждает не заранее
+      выбранное, а то, у которого меньше итоговый показатель.</li>
+  </ul>
+  <table style="margin-bottom:3mm">
+    <tr>
+      <th>Разбиение</th><th class="num-cell">Врезок</th>
+      <th class="num-cell">Реконструкция</th><th class="num-cell">S</th>
+    </tr>
+    <tr class="accent">
+      <td>три независимые части</td><td class="num-cell">3</td>
+      <td class="num-cell">59,9 м</td><td class="num-cell">13,558</td>
+    </tr>
+    <tr>
+      <td>все объекты одной сетью</td><td class="num-cell">1</td>
+      <td class="num-cell">279,4 м</td><td class="num-cell">15,326</td>
+    </tr>
+    <tr>
+      <td>две части</td><td class="num-cell">2</td>
+      <td class="num-cell">385,5 м</td><td class="num-cell">16,718</td>
+    </tr>
+  </table>
+  <p class="muted" style="margin:0">Одна общая сеть потребовала бы врезки в дальнюю
+    точку и реконструкции на 280 метров вместо 60.</p>
+  <div class="num">5</div>
+</section>
+
+<!-- 6 -->
+<section class="slide">
+  <div class="kicker">Оптимизация</div>
+  <h2>Мы измерили, во что упирается качество</h2>
+  <div class="cols">
+    <div>
+      <table>
+        <tr>
+          <th>Затравок</th><th class="num-cell">Разбиений</th>
+          <th class="num-cell">Время</th><th class="num-cell">Лучший S</th>
+        </tr>
+        <tr><td>8</td><td class="num-cell">3</td><td class="num-cell">19 с</td>
+          <td class="num-cell">13,895</td></tr>
+        <tr><td>16</td><td class="num-cell">5</td><td class="num-cell">79 с</td>
+          <td class="num-cell">13,895</td></tr>
+        <tr><td>32</td><td class="num-cell">6</td><td class="num-cell">284 с</td>
+          <td class="num-cell">13,895</td></tr>
+      </table>
+      <div class="quote">Пятнадцатикратный рост перебора не сдвинул результат
+        ни на тысячную. Значит, нужен был недостающий ход, а не время.</div>
+    </div>
+    <div>
+      <p>Развилки стояли на углах обогнутых зданий — там, где сошлись два кратчайших
+        пути. В задаче Штейнера оптимальная развилка лежит в <strong>точке Ферма</strong>,
+        где рёбра расходятся под 120°.</p>
+      <p>Минимизируем не длину, а стоимость: метр ДУ 300 вдвое дороже метра ДУ 65,
+        поэтому ствол тянет развилку сильнее отводов.</p>
+      <table>
+        <tr><th></th><th class="num-cell">Было</th><th class="num-cell">Стало</th></tr>
+        <tr><td>Показатель S</td><td class="num-cell">13,895</td>
+          <td class="num-cell" style="color:var(--accent)">13,558</td></tr>
+        <tr><td>Новая сеть</td><td class="num-cell">1884,0 м</td>
+          <td class="num-cell" style="color:var(--accent)">1825,5 м</td></tr>
+      </table>
+    </div>
+  </div>
+  <div class="num">6</div>
+</section>
+
+<!-- 7 -->
+<section class="slide">
+  <div class="kicker">Правила</div>
+  <h2>Ограничения, которые легко нарушить незаметно</h2>
+  <table>
+    <tr><th style="width:38%">Правило</th><th>Как соблюдается</th></tr>
+    <tr>
+      <td>К камере не более четырёх участков</td>
+      <td>Встроено в построение: узел без запаса исключается из поиска. Учтено и то,
+        что независимые части сети могут выбрать одну камеру</td>
+    </tr>
+    <tr>
+      <td>Трассы не пересекаются вне общего узла</td>
+      <td>Внутри части сети пересечение объединяется в узел — сеть при этом
+        становится короче. Между независимыми частями часть строится заново в обход</td>
+    </tr>
+    <tr>
+      <td>Точка подключения — конец ветви</td>
+      <td>Транзит через чужое здание запрещён: развилка обязана быть в камере,
+        а не в чужом ИТП</td>
+    </tr>
+    <tr>
+      <td>Предельная длина части одного диаметра</td>
+      <td>Обход дерева с накоплением длины; при исчерпании диаметр растёт,
+        ставится технический узел</td>
+    </tr>
+  </table>
+  <div class="quote">Первый прогон нашёл семь самопересечений трасс.
+    Их не видно на глаз — их нашёл тест.</div>
+  <div class="num">7</div>
+</section>
+
+<!-- 8 -->
+<section class="slide">
+  <div class="kicker">Существующая сеть</div>
+  <h2>Новые потребители меняют расходы до источника</h2>
+  <ul>
+    <li>Дополнительный расход от каждой врезки идёт по цепочке к источнику
+      и суммируется с существующим.</li>
+    <li>Если врезка внутри участка — реконструируется <strong>только часть</strong>
+      от неё к источнику, и именно эта часть уходит в выгрузку.</li>
+    <li>Требуемый диаметр подбирается по итоговому расходу.</li>
+  </ul>
+  <table>
+    <tr>
+      <th>Участок</th><th class="num-cell">Расход</th><th class="num-cell">ДУ</th>
+      <th class="num-cell">Длина</th><th class="num-cell">Стоимость</th>
+    </tr>
+    <tr>
+      <td>121</td><td class="num-cell">0 → 488,72 т/ч</td>
+      <td class="num-cell">300 → 400</td><td class="num-cell">59,9 м</td>
+      <td class="num-cell">16 255 756 ₽</td>
+    </tr>
+  </table>
+  <div class="quote">В лучшем варианте реконструкции почти нет — 60 метров.
+    Это не случайность: алгоритм выбрал врезки там, где сеть уже достаточно толстая.
+    Реконструкция за метр дороже нового строительства.</div>
+  <div class="num">8</div>
+</section>
+
+<!-- 9 -->
+<section class="slide">
+  <div class="kicker">Результат</div>
+  <h2>Конкурсный набор</h2>
+  <div class="metrics">
+    <div class="metric">
+      <div class="value accent">13,558</div>
+      <div class="label">показатель ранжирования S</div>
+    </div>
+    <div class="metric">
+      <div class="value">282,2 млн ₽</div>
+      <div class="label">итоговая стоимость</div>
+    </div>
+    <div class="metric">
+      <div class="value">17 из 17</div>
+      <div class="label">объектов подключено</div>
+    </div>
+  </div>
+  <div class="cols">
+    <div>
+      <table>
+        <tr><th>Состав решения</th><th class="num-cell"></th></tr>
+        <tr><td>Новая сеть</td><td class="num-cell">1 825,5 м, 28 участков</td></tr>
+        <tr><td>Тепловые камеры</td><td class="num-cell">12</td></tr>
+        <tr><td>Врезки</td><td class="num-cell">3</td></tr>
+        <tr><td>Реконструкция</td><td class="num-cell">59,9 м и одна камера</td></tr>
+        <tr><td>Время расчёта</td><td class="num-cell">22 с</td></tr>
+      </table>
+    </div>
+    <div>
+      <table>
+        <tr><th>Из чего сложилась стоимость</th><th class="num-cell">млн ₽</th></tr>
+        <tr><td>Новые участки сети</td><td class="num-cell">204,0</td></tr>
+        <tr><td>Новые тепловые камеры</td><td class="num-cell">42,0</td></tr>
+        <tr><td>Врезки</td><td class="num-cell">15,0</td></tr>
+        <tr><td>Реконструкция участков</td><td class="num-cell">16,3</td></tr>
+        <tr><td>Реконструкция камеры</td><td class="num-cell">5,0</td></tr>
+        <tr class="accent"><td>Итого</td><td class="num-cell">282,2</td></tr>
+      </table>
+    </div>
+  </div>
+  <div class="num">9</div>
+</section>
+
+<!-- 10 -->
+<section class="slide">
+  <div class="kicker">Дополнительная задача</div>
+  <h2>Сеть проходит не только в плане, но и по глубине</h2>
+  <div class="cols">
+    <div>
+      <ul>
+        <li>Обычная глубина 3,0 м, подбор шагом 0,5 м.</li>
+        <li>В месте пересечения — выше или ниже коммуникации, выбор по стоимости.</li>
+        <li>Профиль: заглубление с уклоном не круче 0,10 м/м, горизонтальная
+          вставка 4 м, возврат.</li>
+        <li>Коэффициент <code>Kгл</code> растёт на 10 % за каждый метр глубже трёх.</li>
+      </ul>
+      <div class="quote">Существующая теплосеть лежит на трёх метрах. Проводим новую
+        поверх неё, на двух, с просветом 0,55 м при норме 0,5. Снизу пришлось бы уйти
+        на 4,5 метра и добавить 15 % к стоимости участка.</div>
+    </div>
+    <div>
+      <p>Если манёвр не помещается — пересечение приходится на первые метры нитки, —
+        сервис <strong>не подставляет желаемую глубину</strong>. В выгрузку идёт та,
+        на которой труба действительно проходит.</p>
+      <p>Профиль при этом возвращает замечание маршрутизации: место запрещается,
+        и вариант строится заново. На конкурсном наборе это нарушение так не снимается,
+        и сервис честно показывает его, понижая вариант.</p>
+      <p><span class="pill good">просвет выдержан</span>
+         <span class="pill bad">норма нарушена — вариант понижен</span></p>
+    </div>
+  </div>
+  <div class="num">10</div>
+</section>
+
+<!-- 11 -->
+<section class="slide">
+  <div class="kicker">Сверх задания</div>
+  <h2>Три вопроса, которые задают первыми</h2>
+  <div class="cols">
+    <div>
+      <p><strong>«А если здесь копать нельзя?»</strong> Щелчок по карте — и место
+        становится запретной зоной. Сеть строится заново, целиком: это не правка
+        результата руками, а дополнительное исходное условие.</p>
+      <p class="muted">Запрет поперёк магистрали меняет не трассу, а стратегию:
+        схема с тремя частями через это место не проходит, и наверх выходит вариант
+        «все объекты одной сетью». S с 13,6 до 15,9 — цена запрета.</p>
+      <p><strong>«А по чему считать смету?»</strong> Рядом с выгрузкой GeoJSON —
+        ведомость объёмов работ: участки, камеры, врезки, реконструкция, свод
+        по условным диаметрам и итог. Открывается в Excel двойным щелчком.</p>
+    </div>
+    <div>
+      <p><strong>«А вы уверены, что существующая сеть пустая?»</strong> Не уверены —
+        этих данных в наборе нет. Переключатель «сеть загружена» принимает расход
+        равным половине пропускной способности:</p>
+      <table>
+        <tr>
+          <th>Допущение</th><th class="num-cell">Реконструкция</th>
+          <th class="num-cell">Стоимость</th><th class="num-cell">S</th>
+        </tr>
+        <tr>
+          <td>расход нулевой</td><td class="num-cell">59,9 м</td>
+          <td class="num-cell">16,3 млн ₽</td><td class="num-cell">13,558</td>
+        </tr>
+        <tr>
+          <td>50 % ёмкости</td><td class="num-cell">279,4 м</td>
+          <td class="num-cell">75,8 млн ₽</td><td class="num-cell">15,326</td>
+        </tr>
+      </table>
+      <div class="quote">Шестьдесят миллионов — цена нашего главного допущения.
+        Мы его не прячем, а даём проверить.</div>
+    </div>
+  </div>
+  <div class="num">11</div>
+</section>
+
+<!-- 12 -->
+<section class="slide">
+  <div class="kicker">Универсальность</div>
+  <h2>Почему это выдержит проверку на другом наборе</h2>
+  <ul>
+    <li>Координаты и идентификаторы нигде не зафиксированы в коде.</li>
+    <li>Справочник технического приложения — отдельный файл, подменяется без
+      пересборки; текущие значения видны через <code>GET /api/v1/reference</code>.</li>
+    <li>Типы ограничений вне таблицы 5.1 разрешаются словарём псевдонимов,
+      неизвестный обрабатывается консервативно и попадает в диагностику.</li>
+    <li>Изготовлен набор с <strong>полным атрибутивным составом</strong> и проверен
+      тем же кодом: на нём ничего не восстанавливается.</li>
+    <li>Плотность обстановки измерена: 34, 51 и 85 объектов считаются за 25, 43 и 69 с —
+      время растёт линейно.</li>
+  </ul>
+  <div class="metrics">
+    <div class="metric">
+      <div class="value">93</div>
+      <div class="label">автотеста на бэкенде</div>
+    </div>
+    <div class="metric">
+      <div class="value">6</div>
+      <div class="label">сквозных сценариев в браузере</div>
+    </div>
+    <div class="metric">
+      <div class="value accent">13 из 13</div>
+      <div class="label">проверок развёртывания с нуля</div>
+    </div>
+  </div>
+  <div class="num">12</div>
+</section>
+
+<!-- 13 -->
+<section class="slide">
+  <div class="kicker">Итог</div>
+  <h2>Сервис делает работу инженера и объясняет каждое решение</h2>
+  <ul>
+    <li><strong>Полный обязательный функционал</strong> раздела 2.11 и дополнительная
+      задача по глубине.</li>
+    <li><strong>Каждое допущение задокументировано и проверяемо</strong> — сервис
+      не подставляет числа молча и показывает, во что обходится предположение.</li>
+    <li><strong>Развёртывание одной командой</strong>, стек ровно по требованиям
+      задания: Java 11, Spring Boot 2.6.3, PostGIS, Ubuntu Server 22.</li>
+  </ul>
+  <div class="quote">Там, где решение чего-то не умеет, об этом написано числом,
+    а не умолчанием: границы применения перечислены в сопроводительной документации
+    вместе с измерениями.</div>
+  <p class="muted">Исходный код, документация и выгрузка результата — в репозитории.
+    Запуск: <code>docker compose up -d --build</code></p>
+  <div class="num">13</div>
+</section>
+
+<div class="hint">← → или пробел — листать · Ctrl+P — сохранить в PDF</div>
+
+<script>
+  // Перелистывание клавишами: на защите докладчик не должен искать место,
+  // куда прокрутить страницу.
+  const slides = [...document.querySelectorAll('.slide')];
+  let current = 0;
+
+  function show(index) {
+    current = Math.max(0, Math.min(slides.length - 1, index));
+    slides[current].scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }
+
+  document.addEventListener('keydown', (e) => {
+    if (['ArrowRight', 'PageDown', ' '].includes(e.key)) {
+      e.preventDefault();
+      show(current + 1);
+    }
+    if (['ArrowLeft', 'PageUp'].includes(e.key)) {
+      e.preventDefault();
+      show(current - 1);
+    }
+    if (e.key === 'Home') { e.preventDefault(); show(0); }
+    if (e.key === 'End') { e.preventDefault(); show(slides.length - 1); }
+  });
+
+  // Номер текущего слайда держим в соответствии с прокруткой: иначе стрелка
+  // после ручной прокрутки уводит не туда, где докладчик остановился.
+  const observer = new IntersectionObserver((entries) => {
+    entries.forEach((entry) => {
+      if (entry.isIntersecting) {
+        current = slides.indexOf(entry.target);
+      }
+    });
+  }, { threshold: 0.5 });
+  slides.forEach((slide) => observer.observe(slide));
+</script>
+
+</body>
+</html>
