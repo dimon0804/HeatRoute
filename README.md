@@ -42,6 +42,9 @@ docker-compose up -d --build
 | Состояние сервиса | http://localhost:8080/actuator/health |
 
 Конкурсный набор — `data/samples/dataset_lct2026.geojson`.
+Готовый результат по нему, который требует раздел 7.2 ТЗ, лежит в
+[`deliverable/`](deliverable/README.md): выгрузка обычного расчёта, выгрузка с учётом
+глубины и ведомость объёмов работ.
 
 ### Разработка
 
