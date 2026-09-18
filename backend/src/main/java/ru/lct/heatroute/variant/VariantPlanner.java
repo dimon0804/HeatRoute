@@ -197,7 +197,8 @@ public class VariantPlanner {
         }
 
         List<List<List<SteinerTreeBuilder.Terminal>>> partitions =
-                new OksClustering(graph, distanceFromTerminal).partitions(terminals, 3);
+                new OksClustering(graph, distanceFromTerminal)
+                        .partitions(terminals, routingProps.getMaxOksPartitions());
 
         // --- 4. Перебор ---------------------------------------------------------------------
         List<CalculationVariant> produced = new ArrayList<>();
