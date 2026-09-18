@@ -287,5 +287,16 @@ class VariantPlannerTest {
         List<String> fingerprints = p.getVariants().stream()
                 .map(CalculationVariant::getStructureFingerprint).collect(java.util.stream.Collectors.toList());
         assertThat(fingerprints).doesNotHaveDuplicates();
+
+        // Отпечаток двухуровневый: «точки врезки + разбиение ОКС | форма дерева».
+        // Форма — запасной источник различий на случай, когда разбиение единственное.
+        // На конкурсном наборе он не нужен: все три варианта различаются по существу,
+        // то есть точками врезки и составом частей сети (раздел 2.8 ТЗ).
+        List<String> bases = fingerprints.stream()
+                .map(f -> f.substring(0, f.lastIndexOf('|')))
+                .collect(java.util.stream.Collectors.toList());
+        assertThat(bases)
+                .as("варианты отличаются точками врезки и разбиением, а не только формой трассы")
+                .doesNotHaveDuplicates();
     }
 }

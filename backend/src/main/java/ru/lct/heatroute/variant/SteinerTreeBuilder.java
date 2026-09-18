@@ -83,15 +83,21 @@ public class SteinerTreeBuilder {
     public Result build(RoutingGraph graph, int rootNode, List<Terminal> terminals,
                         int rootSpareDegree, Terminal seedTerminal) {
         return build(graph, rootNode, terminals, rootSpareDegree, seedTerminal,
-                (a, b, oks) -> true);
+                (a, b, oks) -> true, null);
     }
 
     /**
      * @param passable проверка клиренса для ветви, отходящей от новой камеры
      *                 на уже построенном участке
+     * @param allowedEdges маска разрешённых рёбер графа от {@link RouteBarrier}:
+     *                     принятые части сети и зоны, где манёвр по глубине
+     *                     не помещается. В отличие от {@code passable} действует
+     *                     на основной поиск маршрута, а не только на отводы.
+     *                     {@code null} — запрещать нечего
      */
     public Result build(RoutingGraph graph, int rootNode, List<Terminal> terminals,
-                        int rootSpareDegree, Terminal seedTerminal, Passability passable) {
+                        int rootSpareDegree, Terminal seedTerminal, Passability passable,
+                        boolean[] allowedEdges) {
         RouteTree tree = new RouteTree(rootNode);
         List<Terminal> remaining = new ArrayList<>(terminals);
         List<String> unreachable = new ArrayList<>();
@@ -105,7 +111,7 @@ public class SteinerTreeBuilder {
 
         if (seedTerminal != null && remaining.remove(seedTerminal)) {
             if (!attachNearest(graph, tree, List.of(seedTerminal), rootNode,
-                    rootSpareDegree, maxDegree, terminalNodes)
+                    rootSpareDegree, maxDegree, terminalNodes, allowedEdges)
                     && !attachThroughNewChamber(graph, tree, seedTerminal, maxDegree, passable)) {
                 log.debug("Затравочный терминал {} не присоединился к узлу {}",
                         seedTerminal.getOksId(), rootNode);
@@ -115,7 +121,7 @@ public class SteinerTreeBuilder {
 
         while (!remaining.isEmpty()) {
             Terminal connected = attachNearestTerminal(graph, tree, remaining, rootNode,
-                    rootSpareDegree, maxDegree, terminalNodes);
+                    rootSpareDegree, maxDegree, terminalNodes, allowedEdges);
 
             if (connected == null) {
                 // Узлы дерева исчерпали предел примыканий. Физически это не тупик:
@@ -146,9 +152,9 @@ public class SteinerTreeBuilder {
 
     private boolean attachNearest(RoutingGraph graph, RouteTree tree, List<Terminal> candidates,
                                   int rootNode, int rootSpareDegree, int maxDegree,
-                                  Set<Integer> terminalNodes) {
+                                  Set<Integer> terminalNodes, boolean[] allowedEdges) {
         return attachNearestTerminal(graph, tree, candidates, rootNode,
-                rootSpareDegree, maxDegree, terminalNodes) != null;
+                rootSpareDegree, maxDegree, terminalNodes, allowedEdges) != null;
     }
 
     /**
@@ -159,7 +165,8 @@ public class SteinerTreeBuilder {
     private Terminal attachNearestTerminal(RoutingGraph graph, RouteTree tree,
                                            List<Terminal> candidates, int rootNode,
                                            int rootSpareDegree, int maxDegree,
-                                           Set<Integer> terminalNodes) {
+                                           Set<Integer> terminalNodes,
+                                           boolean[] allowedEdges) {
         Set<Integer> sources = new LinkedHashSet<>();
         Set<Integer> blocked = new LinkedHashSet<>();
 
@@ -184,7 +191,8 @@ public class SteinerTreeBuilder {
             return null;
         }
 
-        RoutingGraph.Frontier frontier = graph.dijkstra(sources, blocked, terminalNodes);
+        RoutingGraph.Frontier frontier =
+                graph.dijkstra(sources, blocked, terminalNodes, allowedEdges);
 
         Terminal best = null;
         double bestDist = Double.POSITIVE_INFINITY;

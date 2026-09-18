@@ -3,6 +3,7 @@ package ru.lct.heatroute.variant;
 import lombok.Value;
 import lombok.extern.slf4j.Slf4j;
 import org.locationtech.jts.geom.Coordinate;
+import org.locationtech.jts.geom.Geometry;
 import org.springframework.stereotype.Component;
 import ru.lct.heatroute.calc.CostCalculator;
 import ru.lct.heatroute.calc.NetworkMaterializer;
@@ -12,6 +13,7 @@ import ru.lct.heatroute.depth.UtilityCrossing;
 import ru.lct.heatroute.domain.model.FutureOks;
 import ru.lct.heatroute.domain.model.InputScene;
 import ru.lct.heatroute.domain.reference.ReferenceCatalog;
+import ru.lct.heatroute.domain.reference.ReferenceProperties;
 import ru.lct.heatroute.domain.reference.ReferenceProperties.DiameterRow;
 import ru.lct.heatroute.domain.result.CalculationVariant;
 import ru.lct.heatroute.domain.result.ChamberReconstructionResult;
@@ -66,6 +68,9 @@ public class VariantPlanner {
     private final CrossingRepair crossingRepair;
     private final TreeImprover treeImprover;
     private final DepthPlanner depthPlanner;
+
+    /** Раздел 2.11 ТЗ: содержательно отличающихся вариантов не больше трёх. */
+    private static final int MAX_VARIANTS = 3;
 
     public VariantPlanner(ReferenceCatalog catalog,
                           GeoProperties geoProps,
@@ -202,12 +207,16 @@ public class VariantPlanner {
 
         // --- 4. Перебор ---------------------------------------------------------------------
         List<CalculationVariant> produced = new ArrayList<>();
+        Map<String, List<List<SteinerTreeBuilder.Terminal>>> partitionByVariant =
+                new LinkedHashMap<>();
         int variantCounter = 0;
 
         for (List<List<SteinerTreeBuilder.Terminal>> partition : partitions) {
+            String variantId = "v" + (++variantCounter);
             CalculationVariant variant = buildVariant(scene, graph, field, located,
                     partition, oksById, terminalNodeIds, distanceFromTerminal,
-                    "v" + (++variantCounter));
+                    variantId, RouteBarrier.NONE, null);
+            partitionByVariant.put(variantId, partition);
             if (variant != null) {
                 produced.add(variant);
             }
@@ -216,6 +225,12 @@ public class VariantPlanner {
                             variantCounter, partitions.size()));
         }
 
+        // Разбиения — основной источник различий; если их не хватило, различие даёт
+        // форма дерева при той же точке врезки.
+        variantCounter = addSeededVariants(produced, partitionByVariant, partitions, scene,
+                graph, field, located, oksById, terminalNodeIds, distanceFromTerminal,
+                variantCounter);
+
         Map<String, List<UtilityCrossing>> crossings = new LinkedHashMap<>();
         Map<String, List<String>> depthUnresolved = new LinkedHashMap<>();
 
@@ -223,19 +238,15 @@ public class VariantPlanner {
             progress.report(0.95, "Построение профиля по глубине");
             List<CalculationVariant> withProfile = new ArrayList<>(produced.size());
             for (CalculationVariant variant : produced) {
-                DepthPlanner.Result depth = depthPlanner.apply(variant, scene);
-                CalculationVariant updated = depth.getVariant();
-                // Стоимость участков изменилась: пересчитываем сводку по разделу 8 ТП.
-                updated = updated.withSummary(costCalculator.summarize(
-                        updated.getVariantId(), updated.getSegments(), updated.getChambers(),
-                        updated.getTieIns(), updated.getReconstructions(),
-                        updated.getChamberReconstructions(),
-                        variant.getSummary().getUnconnectedOksIds(), oksById));
-                withProfile.add(updated);
-                crossings.put(updated.getVariantId(), depth.getCrossings());
-                depthUnresolved.put(updated.getVariantId(), depth.getUnresolved());
+                withProfile.add(applyDepth(variant, scene, oksById,
+                        variant.getSummary().getUnconnectedOksIds(), crossings, depthUnresolved));
             }
             produced = withProfile;
+
+            // Профиль умеет сказать маршрутизации, где ей не хватило места.
+            produced = relayUnfittingManoeuvres(produced, scene, graph, field, located,
+                    partitionByVariant, oksById, terminalNodeIds, distanceFromTerminal,
+                    crossings, depthUnresolved, progress);
         }
 
         List<CalculationVariant> ranked = rank(produced, depthViolations(crossings));
@@ -262,7 +273,9 @@ public class VariantPlanner {
                                             Map<String, FutureOks> oksById,
                                             Map<String, String> terminalNodeIds,
                                             Map<String, double[]> distanceFromTerminal,
-                                            String variantId) {
+                                            String variantId,
+                                            RouteBarrier zones,
+                                            Integer forcedSeed) {
         List<NewSegment> segments = new ArrayList<>();
         List<NewChamberResult> chambers = new ArrayList<>();
         List<TechnicalNodeResult> nodes = new ArrayList<>();
@@ -282,28 +295,36 @@ public class VariantPlanner {
             if (group.isEmpty()) {
                 continue;
             }
-            GroupResult best = null;
-            for (TieInCandidate candidate : shortlist(candidates, group, distanceFromTerminal)) {
-                GroupResult result = buildGroup(scene, graph, field, candidate, group,
-                        variantId, terminalNodeIds, oksById, ids,
-                        consumedAtNode.getOrDefault(candidate.getGraphNodeIndex(), 0),
-                        segments);
-                if (result == null) {
-                    continue;
-                }
-                if (best == null || betterThan(result, best)) {
-                    best = result;
-                }
-            }
+            List<TieInCandidate> shortlist = shortlist(candidates, group, distanceFromTerminal);
+            GroupResult best = bestOverCandidates(scene, graph, field, shortlist, group,
+                    variantId, terminalNodeIds, oksById, ids, consumedAtNode, segments,
+                    zones, forcedSeed);
+
             if (best != null && best.getCrossingsWithAccepted() > 0) {
                 // Независимые части сети объединить нельзя: у каждой своя точка врезки,
                 // и объединение дало бы два пути до одного ОКС вопреки разделу 2.2 ТЗ.
-                // Раз ни одна точка врезки не даёт части без пересечений, это разбиение
-                // ОКС непригодно целиком. Разбиение «все одной сетью» пересечений между
-                // частями не имеет по построению, поэтому хотя бы один вариант останется.
-                log.debug("Разбиение отброшено: часть сети пересекает уже принятые "
-                        + "участки при любой точке врезки (вариант {})", variantId);
-                return null;
+                // Значит, часть строится заново — с принятыми участками в роли препятствия.
+                // Обойти соседнюю часть почти всегда дешевле, чем потерять разбиение:
+                // трасса удлиняется на обход, а вариант остаётся в выдаче.
+                GroupResult detour = bestOverCandidates(scene, graph, field, shortlist, group,
+                        variantId, terminalNodeIds, oksById, ids, consumedAtNode, segments,
+                        zones.plus(RouteBarrier.ofAcceptedParts(segments)), forcedSeed);
+                if (detour != null && detour.getCrossingsWithAccepted() == 0) {
+                    log.debug("Часть сети перестроена в обход принятых участков: "
+                                    + "подключено {} из {} ОКС, S части {} → {} (вариант {})",
+                            group.size() - detour.getUnconnected().size(), group.size(),
+                            String.format("%.3f", best.getScore()),
+                            String.format("%.3f", detour.getScore()), variantId);
+                    best = detour;
+                } else {
+                    // Обхода нет: препятствия и принятые части замкнули коридор.
+                    // Разбиение непригодно целиком; разбиение «все одной сетью»
+                    // пересечений между частями не имеет по построению, поэтому
+                    // хотя бы один вариант в выдаче останется.
+                    log.debug("Разбиение отброшено: часть сети не обходит уже принятые "
+                            + "участки ни при одной точке врезки (вариант {})", variantId);
+                    return null;
+                }
             }
             if (best == null) {
                 group.forEach(t -> unconnected.add(t.getOksId()));
@@ -341,10 +362,15 @@ public class VariantPlanner {
         VariantSummary summary = costCalculator.summarize(variantId, segments, chambers,
                 tieIns, recon.getSegments(), recon.getChambers(), unconnected, oksById);
 
+        // Отпечаток двухуровневый. Основная часть — точки врезки и разбиение ОКС:
+        // по разделу 2.8 ТЗ именно они делают решения содержательно разными. Хвост —
+        // форма дерева; он нужен, только когда основных различий на три варианта
+        // не набралось, и в ранжировании используется вторым проходом.
         String fingerprint = tieInSignature + "|" + partition.stream()
                 .map(g -> g.stream().map(SteinerTreeBuilder.Terminal::getOksId).sorted()
                         .collect(Collectors.joining(",")))
-                .sorted().collect(Collectors.joining(";"));
+                .sorted().collect(Collectors.joining(";"))
+                + "|" + topologySignature(segments);
 
         return CalculationVariant.builder()
                 .variantId(variantId)
@@ -400,6 +426,41 @@ public class VariantPlanner {
                 .collect(Collectors.toList());
     }
 
+    /** Лучшая точка врезки для части сети при заданном наборе запретов. */
+    private GroupResult bestOverCandidates(InputScene scene,
+                                           RoutingGraph graph,
+                                           ObstacleField field,
+                                           List<TieInCandidate> shortlist,
+                                           List<SteinerTreeBuilder.Terminal> group,
+                                           String variantId,
+                                           Map<String, String> terminalNodeIds,
+                                           Map<String, FutureOks> oksById,
+                                           NetworkMaterializer.IdSequence ids,
+                                           Map<Integer, Integer> consumedAtNode,
+                                           List<NewSegment> accepted,
+                                           RouteBarrier barrier,
+                                           Integer forcedSeed) {
+        // Запреты одни и те же для всех кандидатов врезки этой части сети, поэтому
+        // маска рёбер считается здесь, а не внутри построения каждого дерева.
+        boolean[] allowedEdges = barrier.isEmpty() ? null
+                : graph.edgeMask((from, to) -> !barrier.blocks(graph.node(from).getLocation(),
+                        graph.node(to).getLocation()));
+        GroupResult best = null;
+        for (TieInCandidate candidate : shortlist) {
+            GroupResult result = buildGroup(scene, graph, field, candidate, group,
+                    variantId, terminalNodeIds, oksById, ids,
+                    consumedAtNode.getOrDefault(candidate.getGraphNodeIndex(), 0),
+                    accepted, barrier, allowedEdges, forcedSeed);
+            if (result == null) {
+                continue;
+            }
+            if (best == null || betterThan(result, best)) {
+                best = result;
+            }
+        }
+        return best;
+    }
+
     /**
      * Порядок предпочтения кандидатов: сначала подключить все ОКС, затем не нарушать
      * запрет пересечений, и только потом — дешевле.
@@ -452,7 +513,10 @@ public class VariantPlanner {
                                    Map<String, FutureOks> oksById,
                                    NetworkMaterializer.IdSequence ids,
                                    int alreadyConsumedAtNode,
-                                   List<NewSegment> acceptedSegments) {
+                                   List<NewSegment> acceptedSegments,
+                                   RouteBarrier barrier,
+                                   boolean[] allowedEdges,
+                                   Integer forcedSeed) {
         // Раздел 3 ТП: к камере примыкает не более четырёх участков. В точке врезки
         // часть мест уже занята: существующей камере — её текущими примыканиями,
         // новой камере на участке — двумя половинами разрезанного участка.
@@ -478,13 +542,22 @@ public class VariantPlanner {
         SteinerTreeBuilder.Result built = null;
         double bestLength = Double.POSITIVE_INFINITY;
         int restarts = Math.max(1, routingProps.getSteinerRestarts());
-        for (int attempt = 0; attempt < restarts; attempt++) {
+        // Заданная затравка означает «построй именно эту форму дерева»: вариант
+        // порождается ради непохожести на уже найденные, и выбор лучшего по длине
+        // вернул бы ту же сеть, что и обычный проход.
+        int firstAttempt = forcedSeed == null ? 0 : forcedSeed;
+        int lastAttempt = forcedSeed == null ? restarts : forcedSeed + 1;
+        if (firstAttempt > group.size()) {
+            return null;
+        }
+        for (int attempt = firstAttempt; attempt < lastAttempt; attempt++) {
             SteinerTreeBuilder.Terminal seed = attempt == 0 || attempt > group.size()
                     ? null : group.get((attempt - 1) % group.size());
             SteinerTreeBuilder.Result trial = treeBuilder.build(graph,
                     candidate.getGraphNodeIndex(), group, rootSpareDegree, seed,
                     (from, to, exemptOks) -> field.isPassable(from, to, designDnForClearance,
-                            exemptOks));
+                            exemptOks) && !barrier.blocks(from, to),
+                    allowedEdges);
             if (trial.isEmpty()) {
                 continue;
             }
@@ -503,15 +576,20 @@ public class VariantPlanner {
                 .map(DiameterRow::getDn).orElse(catalog.largest().getDn());
 
         RouteTree tree = built.getTree();
-        java.util.function.BiPredicate<Integer, Integer> passable = (a, b) -> field.isPassable(
-                tree.locationOf(graph, a), tree.locationOf(graph, b), designDn,
-                tree.isSynthetic(b) ? null : graph.node(b).getTerminalOksId());
+        java.util.function.BiPredicate<Integer, Integer> passable = (a, b) -> {
+            Coordinate from = tree.locationOf(graph, a);
+            Coordinate to = tree.locationOf(graph, b);
+            return field.isPassable(from, to, designDn,
+                    tree.isSynthetic(b) ? null : graph.node(b).getTerminalOksId())
+                    && !barrier.blocks(from, to);
+        };
 
         // Эвристика подключает объекты по одному и назад не оглядывается. Локальное
         // улучшение перецепляет ветви туда, где стало удобнее, и делается до правки
         // пересечений: перестроенные ветви могут пересечься заново.
         treeImprover.improve(tree, graph,
-                (from, to, exemptOks) -> field.isPassable(from, to, designDnForClearance, exemptOks));
+                (from, to, exemptOks) -> field.isPassable(from, to, designDnForClearance,
+                        exemptOks) && !barrier.blocks(from, to));
 
         // Раздел 2.3 ТЗ: пересекающиеся маршруты объединяются в общую сеть.
         // Выполняется до спрямления: объединение убирает лишние звенья, и спрямлять
@@ -614,33 +692,309 @@ public class VariantPlanner {
         return parts + "; " + where;
     }
 
+    /** Профиль по глубине с пересчётом стоимости и записью пересечений. */
+    private CalculationVariant applyDepth(CalculationVariant variant,
+                                          InputScene scene,
+                                          Map<String, FutureOks> oksById,
+                                          List<String> unconnected,
+                                          Map<String, List<UtilityCrossing>> crossings,
+                                          Map<String, List<String>> depthUnresolved) {
+        DepthPlanner.Result depth = depthPlanner.apply(variant, scene);
+        CalculationVariant updated = depth.getVariant();
+        // Стоимость участков изменилась: пересчитываем сводку по разделу 8 ТП.
+        updated = updated.withSummary(costCalculator.summarize(
+                updated.getVariantId(), updated.getSegments(), updated.getChambers(),
+                updated.getTieIns(), updated.getReconstructions(),
+                updated.getChamberReconstructions(), unconnected, oksById));
+        crossings.put(updated.getVariantId(), depth.getCrossings());
+        depthUnresolved.put(updated.getVariantId(), depth.getUnresolved());
+        return updated;
+    }
+
+    /**
+     * Перекладка трассы там, где манёвр по глубине не помещается.
+     * <p>
+     * Просвет не выдерживается, когда пересечение приходится на первые метры нитки:
+     * на смену глубины с 3,0 до 2,0 м при уклоне не круче 0,10 м/м нужно десять метров
+     * разбега, а до точки врезки или узла ветвления их нет. Само пересечение при этом
+     * не обязано быть именно здесь: коммуникация тянется дальше, и пересечь её можно
+     * там, где разбег есть.
+     * <p>
+     * Поэтому вокруг каждого неудавшегося пересечения ставится зона запрета радиусом
+     * в недостающий разбег, и вариант строится заново. Радиус не подобран, а посчитан:
+     * меньший не гарантирует разбега, больший запрещает годные трассы.
+     * <p>
+     * Проходов несколько: обойдя одну зону, трасса может упереться в такую же рядом,
+     * и зоны накапливаются. Перестроенный вариант принимается, только если нарушений
+     * стало меньше и ни один ОКС не потерял подключение. Обход зоны бывает дороже,
+     * но вертикальный просвет — обязательное правило, а показатель S — критерий
+     * сравнения, и правилу уступает.
+     */
+    private List<CalculationVariant> relayUnfittingManoeuvres(
+            List<CalculationVariant> produced,
+            InputScene scene,
+            RoutingGraph graph,
+            ObstacleField field,
+            List<TieInCandidate> candidates,
+            Map<String, List<List<SteinerTreeBuilder.Terminal>>> partitionByVariant,
+            Map<String, FutureOks> oksById,
+            Map<String, String> terminalNodeIds,
+            Map<String, double[]> distanceFromTerminal,
+            Map<String, List<UtilityCrossing>> crossings,
+            Map<String, List<String>> depthUnresolved,
+            Progress progress) {
+
+        List<CalculationVariant> out = new ArrayList<>(produced.size());
+        int passes = Math.max(1, routingProps.getDepthRelayPasses());
+
+        for (CalculationVariant variant : produced) {
+            String variantId = variant.getVariantId();
+            List<List<SteinerTreeBuilder.Terminal>> partition = partitionByVariant.get(variantId);
+
+            CalculationVariant bestVariant = variant;
+            List<UtilityCrossing> bestCrossings = crossings.getOrDefault(variantId, List.of());
+            List<String> bestUnresolved = depthUnresolved.getOrDefault(variantId, List.of());
+            long bestViolations = unmetClearances(bestCrossings);
+            int allowedUnconnected = variant.getSummary().getUnconnectedOksIds().size();
+
+            List<Geometry> zones = new ArrayList<>(forbiddenZones(bestCrossings));
+            if (zones.isEmpty() || partition == null) {
+                out.add(variant);
+                continue;
+            }
+
+            for (int pass = 0; pass < passes && bestViolations > 0; pass++) {
+                progress.report(0.96, "Перекладка трасс по результатам профиля");
+                CalculationVariant rebuilt = buildVariant(scene, graph, field, candidates,
+                        partition, oksById, terminalNodeIds, distanceFromTerminal, variantId,
+                        RouteBarrier.ofZones(zones), null);
+                if (rebuilt == null) {
+                    // Зоны замкнули коридор: трассы в обход нет. Дальше запреты только
+                    // строже, поэтому проходы прекращаются.
+                    log.debug("Перекладка варианта {} невозможна: обхода зон нет", variantId);
+                    break;
+                }
+
+                CalculationVariant relaid = applyDepth(rebuilt, scene, oksById,
+                        rebuilt.getSummary().getUnconnectedOksIds(), crossings, depthUnresolved);
+                List<UtilityCrossing> relaidCrossings = crossings.get(variantId);
+                long violations = unmetClearances(relaidCrossings);
+                boolean noOksLost = relaid.getSummary().getUnconnectedOksIds().size()
+                        <= allowedUnconnected;
+
+                log.debug("Перекладка {}, проход {}: зон {}, трасса {}, нарушений {} → {}",
+                        variantId, pass + 1, zones.size(),
+                        relaid.getStructureFingerprint().equals(variant.getStructureFingerprint())
+                                ? "та же" : "другая",
+                        bestViolations, violations);
+
+                if (violations < bestViolations && noOksLost) {
+                    log.info("Вариант {} переложен по результатам профиля: нарушений просвета "
+                                    + "{} → {}, S {} → {}", variantId, bestViolations, violations,
+                            String.format("%.3f", bestVariant.getSummary().getScore()),
+                            String.format("%.3f", relaid.getSummary().getScore()));
+                    bestVariant = relaid;
+                    bestCrossings = relaidCrossings;
+                    bestUnresolved = depthUnresolved.get(variantId);
+                    bestViolations = violations;
+                }
+
+                // Следующий проход строже: к прежним зонам добавляются те, что остались
+                // после перекладки. Если новых нет, повторять построение незачем —
+                // запреты те же, и трасса получится та же.
+                int before = zones.size();
+                zones.addAll(forbiddenZones(relaidCrossings));
+                if (zones.size() == before) {
+                    break;
+                }
+            }
+
+            if (bestVariant == variant) {
+                log.debug("Перекладка варианта {} не помогла: нарушений просвета осталось {}",
+                        variantId, bestViolations);
+            }
+            crossings.put(variantId, bestCrossings);
+            depthUnresolved.put(variantId, bestUnresolved);
+            out.add(bestVariant);
+        }
+        return out;
+    }
+
+    /**
+     * Зоны запрета вокруг пересечений, где просвет не выдержан.
+     * <p>
+     * Радиус считается по недостающему просвету, а не по построенной глубине: глубина
+     * в таком месте как раз и осталась обычной, потому что манёвр не поместился, и по
+     * ней разбег вышел бы нулевым. Не хватило ровно {@code required − actual} метров
+     * по вертикали; при предельном уклоне на них нужно {@code (required − actual) /
+     * maxSlope} метров хода плюс половина горизонтальной вставки в зоне пересечения
+     * (раздел 4 приложения по глубине). Столько места и должно быть до пересечения —
+     * значит, пересечь коммуникацию нужно не ближе этого расстояния.
+     */
+    private List<Geometry> forbiddenZones(List<UtilityCrossing> crossings) {
+        ReferenceProperties.Depth params = catalog.props().getDepth();
+        List<Geometry> zones = new ArrayList<>();
+        for (UtilityCrossing c : crossings) {
+            if (c.getRequiredClearance() <= 0
+                    || c.getActualClearance() + 1e-6 >= c.getRequiredClearance()) {
+                continue;
+            }
+            double shortfall = c.getRequiredClearance() - c.getActualClearance();
+            double runup = shortfall / params.getMaxSlope() + params.getCrossingFlatHalf();
+            zones.add(Geo.point(c.getLocation()).buffer(runup));
+        }
+        return zones;
+    }
+
+    /** Сколько пересечений осталось без требуемого вертикального просвета. */
+    private long unmetClearances(List<UtilityCrossing> crossings) {
+        if (crossings == null) {
+            return 0;
+        }
+        return crossings.stream()
+                .filter(c -> c.getRequiredClearance() > 0)
+                .filter(c -> c.getActualClearance() + 1e-6 < c.getRequiredClearance())
+                .count();
+    }
+
+    /**
+     * Достройка вариантов затравочными терминалами.
+     * <p>
+     * Запускается, только если разбиения ОКС дали меньше трёх содержательно разных
+     * решений: на конкурсном наборе их три и этот код не работает. На наборе, где
+     * все ОКС лежат одной гроздью, разбиение единственное, и «до трёх вариантов»
+     * раздела 2.11 ТЗ иначе не выполнить. Эвристика запускается с другого
+     * затравочного терминала и строит при той же точке врезки другую сеть.
+     */
+    private int addSeededVariants(List<CalculationVariant> produced,
+                                  Map<String, List<List<SteinerTreeBuilder.Terminal>>>
+                                          partitionByVariant,
+                                  List<List<List<SteinerTreeBuilder.Terminal>>> partitions,
+                                  InputScene scene,
+                                  RoutingGraph graph,
+                                  ObstacleField field,
+                                  List<TieInCandidate> candidates,
+                                  Map<String, FutureOks> oksById,
+                                  Map<String, String> terminalNodeIds,
+                                  Map<String, double[]> distanceFromTerminal,
+                                  int variantCounter) {
+        Set<String> bases = produced.stream()
+                .map(VariantPlanner::baseOf)
+                .collect(Collectors.toCollection(LinkedHashSet::new));
+        if (bases.size() >= MAX_VARIANTS || partitions.isEmpty()) {
+            return variantCounter;
+        }
+
+        Set<String> seen = produced.stream()
+                .map(CalculationVariant::getStructureFingerprint)
+                .collect(Collectors.toCollection(LinkedHashSet::new));
+        int attempts = Math.max(0, routingProps.getSeededVariantAttempts());
+        // Затравка не должна стоить подключения: вариант с лишним неподключенным ОКС
+        // дороже любого из уже найденных на 100 млн руб. штрафа (раздел 8.3 ТП),
+        // и в выдаче ему делать нечего.
+        int bestUnconnected = produced.stream()
+                .mapToInt(v -> v.getSummary().getUnconnectedOksIds().size())
+                .min().orElse(0);
+        int added = 0;
+
+        for (int seed = 1; seed <= attempts && seen.size() < MAX_VARIANTS; seed++) {
+            String variantId = "v" + (++variantCounter);
+            CalculationVariant seeded = buildVariant(scene, graph, field, candidates,
+                    partitions.get(0), oksById, terminalNodeIds, distanceFromTerminal,
+                    variantId, RouteBarrier.NONE, seed);
+            if (seeded == null
+                    || seeded.getSummary().getUnconnectedOksIds().size() > bestUnconnected
+                    || !seen.add(seeded.getStructureFingerprint())) {
+                continue;
+            }
+            produced.add(seeded);
+            partitionByVariant.put(variantId, partitions.get(0));
+            added++;
+        }
+        if (added > 0) {
+            log.info("Разбиения дали {} решений; затравками достроено ещё {}",
+                    bases.size(), added);
+        }
+        return variantCounter;
+    }
+
+    /** Основная часть отпечатка: точки врезки и разбиение ОКС, без формы дерева. */
+    private static String baseOf(CalculationVariant v) {
+        String fingerprint = v.getStructureFingerprint();
+        int tail = fingerprint.lastIndexOf('|');
+        return tail < 0 ? fingerprint : fingerprint.substring(0, tail);
+    }
+
+    /**
+     * Форма сети одной строкой: концы участков, округлённые до метра. Две сети с одними
+     * и теми же точками врезки различаются именно ходом трасс, а метр — та точность,
+     * ниже которой различие уже «небольшое смещение» из раздела 2.8 ТЗ.
+     */
+    private static String topologySignature(List<NewSegment> segments) {
+        return Integer.toHexString(segments.stream()
+                .map(seg -> {
+                    Coordinate a = seg.getGeometry().getCoordinateN(0);
+                    Coordinate b = seg.getGeometry().getCoordinateN(
+                            seg.getGeometry().getNumPoints() - 1);
+                    return Math.round(a.x) + "," + Math.round(a.y) + ">"
+                            + Math.round(b.x) + "," + Math.round(b.y);
+                })
+                .sorted()
+                .collect(Collectors.joining(";"))
+                .hashCode());
+    }
+
     /**
      * Отсев содержательно совпадающих решений и ранжирование по S.
+     * <p>
      * Раздел 2.8 ТЗ: небольшое смещение одной и той же трассы отдельным вариантом
-     * не считается, поэтому сравниваются точки врезки и разбиение ОКС по частям сети.
+     * не считается, поэтому первым проходом берётся по одному решению на каждую пару
+     * «точки врезки + разбиение ОКС». Если таких пар меньше трёх, вторым проходом
+     * добираются сети другой формы — это всё же разные решения, а пустое место
+     * в выдаче не помогает никому.
      */
     private List<CalculationVariant> rank(List<CalculationVariant> variants,
                                           Map<String, Long> depthViolations) {
-        Map<String, CalculationVariant> distinct = new LinkedHashMap<>();
-        for (CalculationVariant v : variants) {
-            distinct.merge(v.getStructureFingerprint(), v,
-                    (a, b) -> a.getSummary().getScore() <= b.getSummary().getScore() ? a : b);
-        }
-        List<CalculationVariant> sorted = new ArrayList<>(distinct.values());
         // Показатель S считается строго по разделу 8.2 ТП и ничем не дополняется.
         // Невыдержанный вертикальный просвет — не надбавка к стоимости, а признак
         // того, что вариант неисполним, поэтому он отсекает раньше сравнения по S.
-        sorted.sort(Comparator
+        Comparator<CalculationVariant> order = Comparator
                 .comparingLong((CalculationVariant v) ->
                         depthViolations.getOrDefault(v.getVariantId(), 0L))
-                .thenComparingDouble(v -> v.getSummary().getScore()));
+                .thenComparingDouble(v -> v.getSummary().getScore());
+
+        List<CalculationVariant> pool = new ArrayList<>(variants);
+        pool.sort(order);
 
         List<CalculationVariant> out = new ArrayList<>();
-        for (int i = 0; i < Math.min(3, sorted.size()); i++) {
-            CalculationVariant v = sorted.get(i);
-            out.add(v.withSummary(v.getSummary().withRank(i + 1)));
+        Set<String> takenBases = new LinkedHashSet<>();
+        for (CalculationVariant v : pool) {
+            if (out.size() >= MAX_VARIANTS) {
+                break;
+            }
+            if (takenBases.add(baseOf(v))) {
+                out.add(v);
+            }
         }
-        return out;
+        Set<String> takenShapes = out.stream()
+                .map(CalculationVariant::getStructureFingerprint)
+                .collect(Collectors.toCollection(LinkedHashSet::new));
+        for (CalculationVariant v : pool) {
+            if (out.size() >= MAX_VARIANTS) {
+                break;
+            }
+            if (takenShapes.add(v.getStructureFingerprint())) {
+                out.add(v);
+            }
+        }
+
+        out.sort(order);
+        List<CalculationVariant> ranked = new ArrayList<>(out.size());
+        for (int i = 0; i < out.size(); i++) {
+            CalculationVariant v = out.get(i);
+            ranked.add(v.withSummary(v.getSummary().withRank(i + 1)));
+        }
+        return ranked;
     }
 
     /**

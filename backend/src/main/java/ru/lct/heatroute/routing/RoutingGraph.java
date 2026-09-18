@@ -455,6 +455,50 @@ public class RoutingGraph {
     public Frontier dijkstra(java.util.Collection<Integer> sources,
                              java.util.Set<Integer> blocked,
                              java.util.Set<Integer> noTransit) {
+        return dijkstra(sources, blocked, noTransit, (boolean[]) null);
+    }
+
+    /**
+     * Запрет на отдельные рёбра графа, действующий только на этот обход.
+     * <p>
+     * Постоянные препятствия учтены при построении графа: ребра, которое их пересекает,
+     * в графе просто нет. Но часть запретов появляется по ходу перебора — уже принятые
+     * части сети и зоны, где манёвр по глубине не помещается, — и перестраивать ради
+     * них граф целиком незачем: он строится 20 секунд, а живёт один расчёт.
+     */
+    @FunctionalInterface
+    public interface EdgeFilter {
+        boolean allows(int from, int to);
+    }
+
+    /**
+     * Маска разрешённых рёбер по правилу {@code filter}.
+     * <p>
+     * Считается один раз на построение и передаётся во все обходы. Обход вызывается
+     * на каждый подключаемый ОКС, и проверять геометрию в каждом из них — значит
+     * повторить одну и ту же работу десятки раз: на конкурсном наборе это 3 минуты
+     * против доли секунды.
+     */
+    public boolean[] edgeMask(EdgeFilter filter) {
+        boolean[] allowed = new boolean[edgeTarget.length];
+        for (int u = 0; u < nodes.size(); u++) {
+            for (int e = edgeStart[u]; e < edgeStart[u + 1]; e++) {
+                allowed[e] = filter.allows(u, edgeTarget[e]);
+            }
+        }
+        return allowed;
+    }
+
+    /**
+     * То же, с запретом на отдельные рёбра.
+     *
+     * @param edgeAllowed маска из {@link #edgeMask(EdgeFilter)}; {@code null}, если
+     *                    запрещать нечего — тогда проверка не стоит ничего
+     */
+    public Frontier dijkstra(java.util.Collection<Integer> sources,
+                             java.util.Set<Integer> blocked,
+                             java.util.Set<Integer> noTransit,
+                             boolean[] edgeAllowed) {
         int n = nodes.size();
         double[] dist = new double[n];
         double[] len = new double[n];
@@ -487,6 +531,9 @@ public class RoutingGraph {
             for (int e = edgeStart[u]; e < edgeStart[u + 1]; e++) {
                 int v = edgeTarget[e];
                 if (blocked.contains(v)) {
+                    continue;
+                }
+                if (edgeAllowed != null && !edgeAllowed[e]) {
                     continue;
                 }
                 double nd = dist[u] + edgeWeight[e];
