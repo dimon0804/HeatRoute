@@ -69,6 +69,11 @@ public class SceneAssembler {
         final List<RawFeature> unknown = new ArrayList<>();
         long total;
 
+        /** Сколько объектов было во входном файле. */
+        public long totalRead() {
+            return total;
+        }
+
         public void accept(RawFeature f) {
             total++;
             Optional<ObjectType> type = ObjectType.of(f.str("object_type"));
@@ -135,6 +140,7 @@ public class SceneAssembler {
                 .chambersById(chambers.stream().collect(Collectors.toMap(
                         ExistingChamber::getId, ch -> ch, (a, b) -> a, LinkedHashMap::new)))
                 .extent(extent)
+                .sourceFeatureCount(c.total)
                 .diagnostics(diag)
                 .topology(topology)
                 .build();

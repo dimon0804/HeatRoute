@@ -25,7 +25,7 @@ export function SegmentsPanel({
   const [tab, setTab] = useState<Tab>('segments')
 
   const rows = useMemo(() => {
-    if (!result) return { segments: [], reconstruction: [], depth: [] }
+    if (!result?.features) return { segments: [], reconstruction: [], depth: [] }
     const match = (props: Record<string, unknown>) =>
       !activeVariant || props.variant_id === activeVariant
 
@@ -48,7 +48,7 @@ export function SegmentsPanel({
 
   const selectedCrossing = rows.depth.find((row) => String(row.id) === selectedFeatureId)
 
-  if (!result) {
+  if (!result?.features) {
     return (
       <Section title="Участки">
         <Empty>Здесь появятся участки построенной сети.</Empty>

@@ -164,9 +164,13 @@ public class DatasetService {
 
     // =================================================================================
 
+    /**
+     * Число объектов во входном файле, а не в модели: сервис добавляет производные
+     * ограничения (существующая сеть по таблице 5.1) и сливает точки подключения
+     * с полигонами ОКС, поэтому счёт по модели ввёл бы в заблуждение.
+     */
     private long countFeatures(InputScene scene) {
-        return 1L + scene.getSegments().size() + scene.getChambers().size()
-                + scene.getFutureOks().size() + scene.getRestrictions().size();
+        return scene.getSourceFeatureCount();
     }
 
     private String originalName(MultipartFile file) {

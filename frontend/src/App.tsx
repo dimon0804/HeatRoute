@@ -46,8 +46,11 @@ export default function App() {
     api.listDatasets()
       .then((list) => {
         setDatasets(list)
-        if (list.length > 0 && !dataset) {
-          void selectDataset(list[0])
+        // Открываем первый набор, который вообще поддаётся расчёту: в списке могут
+        // лежать файлы, отвергнутые разбором, и открывать их при старте незачем.
+        const usable = list.find((d) => d.status === 'READY' || d.status === 'INVALID')
+        if (usable && !dataset) {
+          void selectDataset(usable)
         }
       })
       .catch((e: Error) => setError(e.message))
@@ -61,9 +64,14 @@ export default function App() {
     setResult(null)
     setActiveVariant(null)
     setError(null)
+    if (next.status === 'FAILED') {
+      // Файл не разобран: показывать по нему нечего, причина видна в панели набора.
+      setScene(null)
+      return
+    }
     try {
       const geo = await api.fetchDatasetSource(next.id)
-      setScene(geo)
+      setScene(geo?.features ? geo : null)
       setFitKey(`${next.id}:${Date.now()}`)
     } catch (e) {
       setScene(null)

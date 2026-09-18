@@ -17,6 +17,11 @@ interface Props {
 
 const EMPTY: GeoJSON.FeatureCollection = { type: 'FeatureCollection', features: [] }
 
+/** Коллекция, пригодная для источника карты: без features MapLibre падает. */
+function safe(collection: GeoJSON.FeatureCollection | null): GeoJSON.FeatureCollection {
+  return collection?.features ? collection : EMPTY
+}
+
 /**
  * Карта: исходная обстановка и построенная сеть.
  * <p>
@@ -60,8 +65,8 @@ export function MapView({
     instance.addControl(new maplibregl.ScaleControl({ maxWidth: 140, unit: 'metric' }), 'bottom-left')
 
     instance.on('load', () => {
-      instance.addSource(SOURCE_IDS.scene, { type: 'geojson', data: sceneRef.current ?? EMPTY })
-      instance.addSource(SOURCE_IDS.result, { type: 'geojson', data: resultRef.current ?? EMPTY })
+      instance.addSource(SOURCE_IDS.scene, { type: 'geojson', data: safe(sceneRef.current) })
+      instance.addSource(SOURCE_IDS.result, { type: 'geojson', data: safe(resultRef.current) })
       addSceneLayers(instance)
       addResultLayers(instance)
       addHighlightLayer(instance)
@@ -88,7 +93,7 @@ export function MapView({
     const instance = map.current
     if (!instance || !ready.current) return
     const source = instance.getSource(SOURCE_IDS.scene) as maplibregl.GeoJSONSource | undefined
-    source?.setData(scene ?? EMPTY)
+    source?.setData(safe(scene))
   }, [scene])
 
   // --- данные результата ------------------------------------------------------------------
@@ -96,7 +101,7 @@ export function MapView({
     const instance = map.current
     if (!instance || !ready.current) return
     const source = instance.getSource(SOURCE_IDS.result) as maplibregl.GeoJSONSource | undefined
-    source?.setData(result ?? EMPTY)
+    source?.setData(safe(result))
   }, [result])
 
   // --- фильтр по варианту -------------------------------------------------------------------
@@ -117,7 +122,7 @@ export function MapView({
     if (instance.getLayer('highlight-line')) instance.setFilter('highlight-line', filter)
     if (instance.getLayer('highlight-point')) instance.setFilter('highlight-point', filter)
 
-    if (!selectedFeatureId || !result) return
+    if (!selectedFeatureId || !result?.features) return
     const feature = result.features.find((f) => f.properties?.id === selectedFeatureId)
     if (!feature?.geometry || !('coordinates' in feature.geometry)) return
 
@@ -512,6 +517,11 @@ function boundsOfGeometry(geometry: GeoJSON.Geometry): maplibregl.LngLatBoundsLi
 
 /** Границы коллекции для подгонки вида. */
 function boundsOf(collection: GeoJSON.FeatureCollection): maplibregl.LngLatBoundsLike | null {
+  // Коллекция может прийти без features: во входном файле бывает что угодно,
+  // а сервис отдаёт его как есть, чтобы карта показывала именно загруженные данные.
+  if (!collection?.features?.length) {
+    return null
+  }
   let minLon = Infinity
   let minLat = Infinity
   let maxLon = -Infinity
