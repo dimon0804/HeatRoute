@@ -196,6 +196,51 @@ class FullSpecDatasetTest {
     }
 
     @Test
+    @DisplayName("Режим с учётом глубины проходит и на этом наборе")
+    void depthModeWorksHereToo() throws Exception {
+        VariantPlanner.Plan deep =
+                planner.plan(scene(), VariantPlanner.Progress.NONE, true);
+
+        assertThat(deep.getVariants())
+                .as("расчёт по глубине даёт варианты и на наборе полного состава")
+                .isNotEmpty();
+
+        for (ru.lct.heatroute.domain.result.CalculationVariant v : deep.getVariants()) {
+            // Глубина проставлена у каждого участка: без этого выгрузка по разделу 7
+            // приложения не состоится.
+            assertThat(v.getSegments())
+                    .allMatch(seg -> seg.getDepthStart() > 0 && seg.getDepthEnd() > 0);
+
+            // Нитка после деления по глубине не распадается.
+            java.util.Set<String> ends = v.getSegments().stream()
+                    .map(ru.lct.heatroute.domain.result.NewSegment::getEndNodeId)
+                    .collect(java.util.stream.Collectors.toSet());
+            long roots = v.getSegments().stream()
+                    .map(ru.lct.heatroute.domain.result.NewSegment::getStartNodeId)
+                    .filter(id -> !ends.contains(id))
+                    .distinct()
+                    .count();
+            assertThat(roots)
+                    .as("начал без входящего участка в варианте %s", v.getVariantId())
+                    .isEqualTo(v.getTieIns().size());
+        }
+
+        // Пересечение всегда ссылается на существующий участок своего варианта.
+        deep.getCrossingsByVariant().forEach((variantId, list) -> {
+            ru.lct.heatroute.domain.result.CalculationVariant v = deep.getVariants().stream()
+                    .filter(x -> x.getVariantId().equals(variantId))
+                    .findFirst().orElse(null);
+            if (v == null) {
+                return;
+            }
+            java.util.Set<String> ids = v.getSegments().stream()
+                    .map(ru.lct.heatroute.domain.result.NewSegment::getId)
+                    .collect(java.util.stream.Collectors.toSet());
+            assertThat(list).allMatch(c -> ids.contains(c.getSegmentId()));
+        });
+    }
+
+    @Test
     @DisplayName("Цепочка к источнику взята из входных данных и замыкается на нём")
     void upstreamChainFromInput() throws Exception {
         InputScene s = scene();

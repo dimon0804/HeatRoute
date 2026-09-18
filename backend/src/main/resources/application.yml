@@ -30,7 +30,7 @@ spring:
   autoconfigure:
     # Автоконфигурация Flyway в Spring Boot 2.6.3 рассчитана на Flyway 8.x и падает
     # на 9.x. Миграции настроены вручную в ru.lct.heatroute.config.FlywayConfig,
-    # что позволяет держать требуемую версию Spring Boot и при этом PostgreSQL 16.
+    # что позволяет держать требуемую версию Spring Boot и при этом PostGIS 15-3.4.
     exclude:
       - org.springframework.boot.autoconfigure.flyway.FlywayAutoConfiguration
 
