@@ -67,6 +67,7 @@ public class VariantPlanner {
     private final VariantRenumberer renumberer;
     private final CrossingRepair crossingRepair;
     private final TreeImprover treeImprover;
+    private final JunctionRelocator junctionRelocator;
     private final DepthPlanner depthPlanner;
 
     /** Раздел 2.11 ТЗ: содержательно отличающихся вариантов не больше трёх. */
@@ -83,6 +84,7 @@ public class VariantPlanner {
                           VariantRenumberer renumberer,
                           CrossingRepair crossingRepair,
                           TreeImprover treeImprover,
+                          JunctionRelocator junctionRelocator,
                           DepthPlanner depthPlanner) {
         this.catalog = catalog;
         this.geoProps = geoProps;
@@ -95,6 +97,7 @@ public class VariantPlanner {
         this.renumberer = renumberer;
         this.crossingRepair = crossingRepair;
         this.treeImprover = treeImprover;
+        this.junctionRelocator = junctionRelocator;
         this.depthPlanner = depthPlanner;
     }
 
@@ -584,12 +587,23 @@ public class VariantPlanner {
                     && !barrier.blocks(from, to);
         };
 
-        // Эвристика подключает объекты по одному и назад не оглядывается. Локальное
-        // улучшение перецепляет ветви туда, где стало удобнее, и делается до правки
-        // пересечений: перестроенные ветви могут пересечься заново.
-        treeImprover.improve(tree, graph,
-                (from, to, exemptOks) -> field.isPassable(from, to, designDnForClearance,
-                        exemptOks) && !barrier.blocks(from, to));
+        // Эвристика подключает объекты по одному и назад не оглядывается. Два хода
+        // исправляют это по очереди: перецепка переносит ветвь туда, где стало удобнее,
+        // перенос развилки ставит её в точку, которая дешевле всего для примыкающих
+        // труб. Ходы связаны: перецепленная ветвь меняет оптимум развилки, а сдвинутая
+        // развилка меняет, куда выгодно цеплять ветвь, — поэтому они чередуются
+        // до исчерпания выигрыша. Оба делаются до правки пересечений: перестроенные
+        // ветви могут пересечься заново.
+        SteinerTreeBuilder.Passability clearance = (from, to, exemptOks) ->
+                field.isPassable(from, to, designDnForClearance, exemptOks)
+                        && !barrier.blocks(from, to);
+        for (int round = 0; round < routingProps.getTreePolishRounds(); round++) {
+            double gain = treeImprover.improve(tree, graph, clearance)
+                    + junctionRelocator.relocate(tree, graph, clearance);
+            if (gain <= 0) {
+                break;
+            }
+        }
 
         // Раздел 2.3 ТЗ: пересекающиеся маршруты объединяются в общую сеть.
         // Выполняется до спрямления: объединение убирает лишние звенья, и спрямлять

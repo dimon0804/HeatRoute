@@ -95,6 +95,11 @@ public class RouteTree {
         terminalFlow.put(node, flowTph);
     }
 
+    /** Родитель узла или {@code null} у корня. */
+    public Integer parentOf(int node) {
+        return parent.get(node);
+    }
+
     public List<Integer> childrenOf(int node) {
         return children.getOrDefault(node, Collections.emptyList());
     }
@@ -234,6 +239,47 @@ public class RouteTree {
             }
         }
         return removed;
+    }
+
+    /**
+     * Переносит узел в новую точку.
+     * <p>
+     * Узел из графа видимости двигать нельзя — его координаты общие для всех вариантов,
+     * поэтому на его месте создаётся собственный узел трассы, и все связи переходят
+     * к нему. Так развилка перестаёт быть привязанной к углу чужого здания, у которого
+     * она оказалась только потому, что через этот угол шёл кратчайший путь.
+     *
+     * @return индекс узла после переноса: тот же для собственного узла, новый для узла графа
+     */
+    public int moveTo(int node, Coordinate location) {
+        if (node == root) {
+            throw new IllegalArgumentException("Корень дерева — точка врезки, её не двигают");
+        }
+        if (syntheticNodes.containsKey(node)) {
+            syntheticNodes.put(node, new Coordinate(location.x, location.y));
+            return node;
+        }
+
+        int moved = addSyntheticNode(location);
+        Integer up = parent.get(node);
+        if (up != null) {
+            reparent(moved, up);
+        }
+        for (Integer child : new ArrayList<>(childrenOf(node))) {
+            reparent(child, moved);
+        }
+        Double flow = terminalFlow.remove(node);
+        String oks = terminalOks.remove(node);
+        if (oks != null) {
+            terminalFlow.put(moved, flow == null ? 0 : flow);
+            terminalOks.put(moved, oks);
+        }
+        if (up != null) {
+            children.getOrDefault(up, new ArrayList<>()).remove((Integer) node);
+        }
+        parent.remove(node);
+        children.remove(node);
+        return moved;
     }
 
     /** Все рёбра дерева в виде пар «родитель — потомок». */
