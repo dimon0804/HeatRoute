@@ -45,6 +45,9 @@ import java.util.stream.Collectors;
 @Component
 public class SceneAssembler {
 
+    /** Сколько идентификаторов показывать в одной записи протокола. */
+    private static final int DIAGNOSTIC_SAMPLE = 50;
+
     private final ReferenceCatalog catalog;
     private final TopologyResolver topologyResolver;
     private final IngestProperties props;
@@ -66,7 +69,11 @@ public class SceneAssembler {
         final List<RawFeature> connectionPoints = new ArrayList<>();
         final List<RawFeature> oksExisting = new ArrayList<>();
         final List<RawFeature> restrictions = new ArrayList<>();
-        final List<RawFeature> unknown = new ArrayList<>();
+        /**
+         * Объекты с нераспознанным {@code object_type} не хранятся: из них нужен
+         * только счёт для протокола, а на большом наборе их может быть миллион.
+         */
+        long unknownCount;
         long total;
 
         /** Сколько объектов было во входном файле. */
@@ -78,7 +85,7 @@ public class SceneAssembler {
             total++;
             Optional<ObjectType> type = ObjectType.of(f.str("object_type"));
             if (type.isEmpty()) {
-                unknown.add(f);
+                unknownCount++;
                 return;
             }
             switch (type.get()) {
@@ -89,7 +96,7 @@ public class SceneAssembler {
                 case OKS_CONNECTION_POINT: connectionPoints.add(f); break;
                 case OKS_EXISTING: oksExisting.add(f); break;
                 case RESTRICTION: restrictions.add(f); break;
-                default: unknown.add(f);
+                default: unknownCount++;
             }
         }
     }
@@ -103,10 +110,10 @@ public class SceneAssembler {
                 c.total, c.sources.size(), c.networks.size(), c.chambers.size(),
                 c.oksFuture.size(), c.connectionPoints.size(), c.oksExisting.size(),
                 c.restrictions.size()));
-        if (!c.unknown.isEmpty()) {
+        if (c.unknownCount > 0) {
             diag.warning("input.unknownType", String.format(
                     "Объектов с неизвестным object_type: %d — не участвуют в расчёте",
-                    c.unknown.size()), List.of());
+                    c.unknownCount), List.of());
         }
 
         HeatSource source = buildSource(c, diag);
@@ -532,9 +539,18 @@ public class SceneAssembler {
 
     private List<RestrictionObject> buildRestrictions(Collector c, IngestDiagnostics diag) {
         List<RestrictionObject> out = new ArrayList<>();
+        // В протокол попадает не более DIAGNOSTIC_SAMPLE идентификаторов: на наборе,
+        // где нераспознан весь слой, полный перечень сам по себе занял бы память,
+        // а читать его всё равно никто не станет — важен тип и счёт.
         List<String> unknownTypes = new ArrayList<>();
+        long unknownTypeCount = 0;
 
-        for (RawFeature f : c.restrictions) {
+        // Ограничений на большом наборе бывают сотни тысяч, и держать одновременно
+        // сырой объект с картой атрибутов и построенную модель незачем: ссылка
+        // на разобранный объект снимается сразу, как только он преобразован.
+        for (int i = 0; i < c.restrictions.size(); i++) {
+            RawFeature f = c.restrictions.get(i);
+            c.restrictions.set(i, null);
             String id = requireId(f, "restriction", diag);
             if (f.geometry() == null || f.geometry().isEmpty()) {
                 diag.warning("restriction.geometry",
@@ -544,7 +560,10 @@ public class SceneAssembler {
             String raw = f.str("restriction_type");
             boolean known = catalog.isKnownType(raw);
             if (!known) {
-                unknownTypes.add(id + ":" + raw);
+                unknownTypeCount++;
+                if (unknownTypes.size() < DIAGNOSTIC_SAMPLE) {
+                    unknownTypes.add(id + ":" + raw);
+                }
             }
             out.add(RestrictionObject.builder()
                     .id(id)
@@ -576,12 +595,12 @@ public class SceneAssembler {
                     .build());
         }
 
-        if (!unknownTypes.isEmpty()) {
+        if (unknownTypeCount > 0) {
             diag.warning("restriction.unknownType", String.format(
                     "Типов ограничений вне таблицы 5.1: %d. Применено правило по умолчанию "
                             + "(обход с минимальным расстоянием). Сопоставление настраивается ключом "
                             + "heatroute.reference.restriction-aliases без изменения кода",
-                    unknownTypes.size()), unknownTypes);
+                    unknownTypeCount), unknownTypes);
         }
 
         Map<String, Long> byType = out.stream().collect(Collectors.groupingBy(
