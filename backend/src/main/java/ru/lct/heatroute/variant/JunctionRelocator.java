@@ -93,10 +93,6 @@ public class JunctionRelocator {
 
     private final ReferenceCatalog catalog;
 
-    /** Диагностика последнего вызова: рассмотрено развилок и отвергнуто положений. */
-    private int considered;
-    private int blocked;
-
     public JunctionRelocator(ReferenceCatalog catalog) {
         this.catalog = catalog;
     }
@@ -107,29 +103,37 @@ public class JunctionRelocator {
      */
     public double relocate(RouteTree tree, RoutingGraph graph,
                            SteinerTreeBuilder.Passability passable) {
+        // Счётчики живут в вызове, а не в поле: компонент один на приложение,
+        // а расчёты идут в несколько потоков — поле означало бы, что один расчёт
+        // пишет в диагностику другого.
+        Tally tally = new Tally();
         double total = 0;
         int moved = 0;
-        considered = 0;
-        blocked = 0;
 
         for (int pass = 0; pass < MAX_PASSES; pass++) {
-            double gain = relocateOnce(tree, graph, passable);
+            double gain = relocateOnce(tree, graph, passable, tally);
             if (gain <= 0) {
                 break;
             }
             total += gain;
             moved++;
         }
-        if (considered > 0) {
+        if (tally.considered > 0) {
             log.debug("Развилки: рассмотрено {}, перенесено {}, положений отвергнуто "
                             + "препятствиями {}, дешевле на {} руб.",
-                    considered, moved, blocked, Math.round(total));
+                    tally.considered, moved, tally.blocked, Math.round(total));
         }
         return total;
     }
 
+    /** Счётчики одного вызова: сколько развилок рассмотрено и сколько положений отвергнуто. */
+    private static final class Tally {
+        private int considered;
+        private int blocked;
+    }
+
     private double relocateOnce(RouteTree tree, RoutingGraph graph,
-                                SteinerTreeBuilder.Passability passable) {
+                                SteinerTreeBuilder.Passability passable, Tally tally) {
         Map<Integer, Double> flows = tree.subtreeFlows();
 
         for (Integer node : new ArrayList<>(tree.nodes())) {
@@ -148,7 +152,7 @@ public class JunctionRelocator {
             if (optimum == null || current.distance(optimum) < MIN_SHIFT_M) {
                 continue;
             }
-            considered++;
+            tally.considered++;
 
             double currentCost = cost(neighbours, current);
             for (double fraction : SHIFT_FRACTIONS) {
@@ -166,7 +170,7 @@ public class JunctionRelocator {
                 boolean reachable = neighbours.stream()
                         .allMatch(n -> passable.check(target, n.location, n.exemptOks, n.diameter));
                 if (!reachable) {
-                    blocked++;
+                    tally.blocked++;
                     continue;
                 }
                 tree.moveTo(node, target);
