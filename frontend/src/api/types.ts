@@ -4,6 +4,16 @@
  * использования.
  */
 
+/**
+ * Запретная зона: круг на местности, через который трасса не пройдёт.
+ * Задаётся пользователем на карте — «здесь копать нельзя».
+ */
+export interface ForbiddenZone {
+  lon: number
+  lat: number
+  radiusM: number
+}
+
 export type DatasetStatus = 'PARSING' | 'READY' | 'INVALID' | 'FAILED'
 export type JobStatus = 'QUEUED' | 'RUNNING' | 'COMPLETED' | 'FAILED' | 'CANCELLED'
 export type Severity = 'INFO' | 'ASSUMPTION' | 'WARNING' | 'ERROR'

@@ -1,4 +1,4 @@
-import type { ApiErrorBody, Dataset, Job } from './types'
+import type { ApiErrorBody, Dataset, ForbiddenZone, Job } from './types'
 
 /**
  * Базовый адрес API. В собранном виде запросы идут через тот же nginx, что раздаёт
@@ -73,11 +73,15 @@ export const api = {
    * глубина каждого участка, пересечения с существующими коммуникациями решаются
    * проходом сверху или снизу, стоимость пересчитывается с коэффициентом по глубине.
    */
-  submitJob(datasetId: string, withDepth = false): Promise<Job> {
+  submitJob(
+    datasetId: string,
+    withDepth = false,
+    forbiddenZones: ForbiddenZone[] = [],
+  ): Promise<Job> {
     return request<Job>('/v1/jobs', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ datasetId, withDepth }),
+      body: JSON.stringify({ datasetId, withDepth, forbiddenZones }),
     })
   },
 

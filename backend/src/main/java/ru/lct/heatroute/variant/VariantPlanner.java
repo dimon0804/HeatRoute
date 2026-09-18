@@ -1,5 +1,6 @@
 package ru.lct.heatroute.variant;
 
+import lombok.Builder;
 import lombok.Value;
 import lombok.extern.slf4j.Slf4j;
 import org.locationtech.jts.geom.Coordinate;
@@ -125,32 +126,77 @@ public class VariantPlanner {
         Progress NONE = (f, s) -> { };
     }
 
+    /**
+     * Что именно считать. Всё, что задаётся на запуск, а не конфигурацией сервиса.
+     */
+    @Value
+    @Builder
+    public static class Options {
+
+        /**
+         * Рассчитать профиль по глубине (дополнительная задача). Стоимость участков
+         * пересчитывается с коэффициентом по глубине, и ранжирование после этого может
+         * измениться: выигрывает вариант, у которого пересечений меньше или они дешевле.
+         */
+        boolean withDepth;
+
+        /**
+         * Условный диаметр, по которому берутся клиренсы при построении графа, мм.
+         * Ноль — подобрать по суммарному расходу перспективных ОКС.
+         */
+        int designDiameter;
+
+        /**
+         * Зоны, через которые трассе проходить нельзя, в рабочей проекции.
+         * <p>
+         * Задаются пользователем: «здесь копать нельзя» — стройплощадка, охранная зона,
+         * участок, который город не отдаёт. Для расчёта это такое же препятствие, как
+         * здание, с одной разницей: здание есть во входных данных, а зона появляется
+         * на запуск и в граф видимости не попадает.
+         */
+        @Builder.Default
+        List<Geometry> forbiddenZones = List.of();
+
+        public static Options flat() {
+            return Options.builder().build();
+        }
+
+        public static Options depth() {
+            return Options.builder().withDepth(true).build();
+        }
+    }
+
     public Plan plan(InputScene scene) {
-        return plan(scene, Progress.NONE, false);
+        return plan(scene, Progress.NONE, Options.flat());
     }
 
     public Plan plan(InputScene scene, Progress progress) {
-        return plan(scene, progress, false);
+        return plan(scene, progress, Options.flat());
     }
 
-    /**
-     * @param withDepth рассчитать профиль по глубине (дополнительная задача).
-     *                  Стоимость участков пересчитывается с коэффициентом по глубине,
-     *                  и ранжирование после этого может измениться: выигрывает вариант,
-     *                  у которого пересечений с коммуникациями меньше или они дешевле.
-     */
     public Plan plan(InputScene scene, Progress progress, boolean withDepth) {
+        return plan(scene, progress,
+                withDepth ? Options.depth() : Options.flat());
+    }
+
+    public Plan plan(InputScene scene, Progress progress, Options options) {
         long started = System.nanoTime();
+        boolean withDepth = options.isWithDepth();
+        RouteBarrier userZones = RouteBarrier.ofZones(options.getForbiddenZones());
 
         // --- 1. Расчётный диаметр клиренсов ----------------------------------------------
         // Клиренс зависит от условного диаметра трассы, а диаметр известен только после
         // построения дерева. Граф строится один раз, поэтому клиренсы берутся по ДУ
         // магистрали — наибольшему в варианте. Маршрут, допустимый для него, допустим
         // и для всех меньших диаметров, значит нарушение нормы невозможно по построению.
-        int designDn = routingProps.getInitialDesignDn() > 0
-                ? routingProps.getInitialDesignDn()
-                : catalog.selectForFlow(scene.totalFutureFlowTph())
-                .map(DiameterRow::getDn).orElse(catalog.largest().getDn());
+        // Порядок источников: запрос важнее конфигурации, конфигурация важнее расчёта
+        // по суммарному расходу. Заданный вручную диаметр — способ посмотреть, что будет
+        // при более строгих клиренсах, не пересобирая сервис.
+        int designDn = firstPositive(
+                options.getDesignDiameter(),
+                routingProps.getInitialDesignDn(),
+                catalog.selectForFlow(scene.totalFutureFlowTph())
+                        .map(DiameterRow::getDn).orElse(catalog.largest().getDn()));
 
         ObstacleField field = new ObstacleField(scene, catalog, geoProps, routingProps);
         progress.report(0.05, "Построение поля препятствий");
@@ -218,7 +264,7 @@ public class VariantPlanner {
             String variantId = "v" + (++variantCounter);
             CalculationVariant variant = buildVariant(scene, graph, field, located,
                     partition, oksById, terminalNodeIds, distanceFromTerminal,
-                    variantId, RouteBarrier.NONE, null);
+                    variantId, userZones, null);
             partitionByVariant.put(variantId, partition);
             if (variant != null) {
                 produced.add(variant);
@@ -232,7 +278,7 @@ public class VariantPlanner {
         // форма дерева при той же точке врезки.
         variantCounter = addSeededVariants(produced, partitionByVariant, partitions, scene,
                 graph, field, located, oksById, terminalNodeIds, distanceFromTerminal,
-                variantCounter);
+                variantCounter, userZones);
 
         Map<String, List<UtilityCrossing>> crossings = new LinkedHashMap<>();
         Map<String, List<String>> depthUnresolved = new LinkedHashMap<>();
@@ -249,7 +295,7 @@ public class VariantPlanner {
             // Профиль умеет сказать маршрутизации, где ей не хватило места.
             produced = relayUnfittingManoeuvres(produced, scene, graph, field, located,
                     partitionByVariant, oksById, terminalNodeIds, distanceFromTerminal,
-                    crossings, depthUnresolved, progress);
+                    crossings, depthUnresolved, progress, userZones);
         }
 
         List<CalculationVariant> ranked = rank(produced, depthViolations(crossings));
@@ -756,7 +802,8 @@ public class VariantPlanner {
             Map<String, double[]> distanceFromTerminal,
             Map<String, List<UtilityCrossing>> crossings,
             Map<String, List<String>> depthUnresolved,
-            Progress progress) {
+            Progress progress,
+            RouteBarrier userZones) {
 
         List<CalculationVariant> out = new ArrayList<>(produced.size());
         int passes = Math.max(1, routingProps.getDepthRelayPasses());
@@ -781,7 +828,7 @@ public class VariantPlanner {
                 progress.report(0.96, "Перекладка трасс по результатам профиля");
                 CalculationVariant rebuilt = buildVariant(scene, graph, field, candidates,
                         partition, oksById, terminalNodeIds, distanceFromTerminal, variantId,
-                        RouteBarrier.ofZones(zones), null);
+                        userZones.plus(RouteBarrier.ofZones(zones)), null);
                 if (rebuilt == null) {
                     // Зоны замкнули коридор: трассы в обход нет. Дальше запреты только
                     // строже, поэтому проходы прекращаются.
@@ -898,7 +945,8 @@ public class VariantPlanner {
                                   Map<String, FutureOks> oksById,
                                   Map<String, String> terminalNodeIds,
                                   Map<String, double[]> distanceFromTerminal,
-                                  int variantCounter) {
+                                  int variantCounter,
+                                  RouteBarrier userZones) {
         Set<String> bases = produced.stream()
                 .map(VariantPlanner::baseOf)
                 .collect(Collectors.toCollection(LinkedHashSet::new));
@@ -922,7 +970,7 @@ public class VariantPlanner {
             String variantId = "v" + (++variantCounter);
             CalculationVariant seeded = buildVariant(scene, graph, field, candidates,
                     partitions.get(0), oksById, terminalNodeIds, distanceFromTerminal,
-                    variantId, RouteBarrier.NONE, seed);
+                    variantId, userZones, seed);
             if (seeded == null
                     || seeded.getSummary().getUnconnectedOksIds().size() > bestUnconnected
                     || !seen.add(seeded.getStructureFingerprint())) {
@@ -937,6 +985,16 @@ public class VariantPlanner {
                     bases.size(), added);
         }
         return variantCounter;
+    }
+
+    /** Первое положительное из перечисленного — так задаётся порядок источников. */
+    private static int firstPositive(int... values) {
+        for (int value : values) {
+            if (value > 0) {
+                return value;
+            }
+        }
+        return 0;
     }
 
     /** Основная часть отпечатка: точки врезки и разбиение ОКС, без формы дерева. */

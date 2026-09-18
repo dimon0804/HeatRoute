@@ -59,7 +59,7 @@ public class JobController {
     public ResponseEntity<JobResponse> submit(@Valid @RequestBody CreateJobRequest request) {
         JobResponse job = calculations.submit(request);
         // Вызов через бин, а не напрямую: асинхронность в Spring работает через прокси.
-        calculations.execute(job.getId(), request.isWithDepth());
+        calculations.execute(job.getId(), request);
         return ResponseEntity.accepted().body(job);
     }
 

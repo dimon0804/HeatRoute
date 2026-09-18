@@ -8,11 +8,14 @@ import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import ru.lct.heatroute.api.dto.CreateJobRequest;
+import ru.lct.heatroute.api.dto.ForbiddenZoneDto;
 import ru.lct.heatroute.api.dto.JobResponse;
 import ru.lct.heatroute.api.dto.JobStatsDto;
 import ru.lct.heatroute.api.dto.VariantResponse;
 import ru.lct.heatroute.api.dto.VariantSummaryDto;
 import ru.lct.heatroute.domain.model.InputScene;
+import ru.lct.heatroute.geo.Geo;
+import ru.lct.heatroute.geo.ProjectionService;
 import ru.lct.heatroute.persistence.CalculationJobEntity;
 import ru.lct.heatroute.persistence.CalculationJobRepository;
 import ru.lct.heatroute.persistence.DatasetEntity;
@@ -52,6 +55,7 @@ public class CalculationService {
     private final VariantRepository variants;
     private final VariantFeatureRepository variantFeatures;
     private final ObjectMapper json;
+    private final ProjectionService projection;
 
     public CalculationService(DatasetService datasets,
                               VariantPlanner planner,
@@ -60,7 +64,8 @@ public class CalculationService {
                               CalculationJobRepository jobs,
                               VariantRepository variants,
                               VariantFeatureRepository variantFeatures,
-                              ObjectMapper json) {
+                              ObjectMapper json,
+                              ProjectionService projection) {
         this.datasets = datasets;
         this.planner = planner;
         this.mapper = mapper;
@@ -69,6 +74,7 @@ public class CalculationService {
         this.variants = variants;
         this.variantFeatures = variantFeatures;
         this.json = json;
+        this.projection = projection;
     }
 
     // =================================================================================
@@ -104,12 +110,10 @@ public class CalculationService {
     /**
      * Фоновое исполнение. Вызывается контроллером сразу после постановки в очередь —
      * именно через бин, а не изнутри службы: асинхронность в Spring работает через прокси.
-     *
-     * @param withDepth рассчитать профиль по глубине (дополнительная задача кейса)
      */
     @Async("calculationExecutor")
     @Transactional(readOnly = true)
-    public void execute(UUID jobId, boolean withDepth) {
+    public void execute(UUID jobId, CreateJobRequest request) {
         CalculationJobEntity job = jobs.findById(jobId).orElse(null);
         if (job == null || job.getStatus() != JobStatus.QUEUED) {
             return;
@@ -123,7 +127,11 @@ public class CalculationService {
 
             VariantPlanner.Plan plan = planner.plan(scene,
                     (fraction, stage) -> state.progress(jobId, JobStatus.RUNNING, fraction, stage),
-                    withDepth);
+                    VariantPlanner.Options.builder()
+                            .withDepth(request.isWithDepth())
+                            .designDiameter(request.getDesignDiameter())
+                            .forbiddenZones(forbiddenZones(request))
+                            .build());
 
             state.saveResult(jobId, plan);
             state.complete(jobId, plan, Duration.ofNanos(System.nanoTime() - started));
@@ -133,6 +141,27 @@ public class CalculationService {
             log.error("Расчёт {} прерван ошибкой", jobId, e);
             state.fail(jobId, e);
         }
+    }
+
+    /**
+     * Запретные зоны из запроса — в рабочую проекцию.
+     * <p>
+     * Приходят они кругом на местности: центр в WGS 84 и радиус в метрах. Радиус
+     * откладывается уже в проекции, потому что в градусах метр — величина, зависящая
+     * от широты, а в UTM это метр и есть.
+     */
+    private List<org.locationtech.jts.geom.Geometry> forbiddenZones(CreateJobRequest request) {
+        if (request.getForbiddenZones() == null || request.getForbiddenZones().isEmpty()) {
+            return List.of();
+        }
+        List<org.locationtech.jts.geom.Geometry> zones =
+                new java.util.ArrayList<>(request.getForbiddenZones().size());
+        for (ForbiddenZoneDto zone : request.getForbiddenZones()) {
+            zones.add(Geo.point(projection.project(zone.getLon(), zone.getLat()))
+                    .buffer(zone.getRadiusM()));
+        }
+        log.info("Расчёт с запретными зонами: {}", zones.size());
+        return zones;
     }
 
     // =================================================================================

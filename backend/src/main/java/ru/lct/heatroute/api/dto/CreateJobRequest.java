@@ -3,7 +3,11 @@ package ru.lct.heatroute.api.dto;
 import io.swagger.v3.oas.annotations.media.Schema;
 import lombok.Data;
 
+import javax.validation.Valid;
 import javax.validation.constraints.NotNull;
+
+import java.util.ArrayList;
+import java.util.List;
 import java.util.UUID;
 
 /** Запрос на расчёт вариантов по загруженному набору. */
@@ -24,4 +28,11 @@ public class CreateJobRequest {
             + "коммуникациями решаются проходом сверху или снизу, стоимость "
             + "пересчитывается с коэффициентом по глубине", example = "false")
     private boolean withDepth;
+
+    @Valid
+    @Schema(description = "Зоны, через которые трассе проходить нельзя. "
+            + "Задаются на запуск: стройплощадка, охранная зона, участок, который город "
+            + "не отдаёт. Для расчёта это такое же препятствие, как здание — трасса его "
+            + "обходит, а если обхода нет, ОКС попадает в список неподключенных со штрафом")
+    private List<ForbiddenZoneDto> forbiddenZones = new ArrayList<>();
 }

@@ -3,6 +3,7 @@ import maplibregl, { Map as MapLibreMap, Popup } from 'maplibre-gl'
 import 'maplibre-gl/dist/maplibre-gl.css'
 import { BASE_STYLE, COLORS, OSM_SOURCE, SOURCE_IDS } from '../lib/mapStyle'
 import { flow, meters, money, OBJECT_TYPE_LABELS, RESTRICTION_LABELS } from '../lib/format'
+import type { ForbiddenZone } from '../api/types'
 
 interface Props {
   scene: GeoJSON.FeatureCollection | null
@@ -13,9 +14,44 @@ interface Props {
   fitKey: string | null
   /** Идентификатор объекта, выбранного в таблице; карта подсвечивает и показывает его. */
   selectedFeatureId: string | null
+  /** Запретные зоны: круги, через которые трасса не пройдёт. */
+  zones: ForbiddenZone[]
+  /** Включён режим постановки зон: щелчок по карте ставит зону, а не открывает объект. */
+  placingZone: boolean
+  /** Поставить зону в точке щелчка. */
+  onPlaceZone: (lon: number, lat: number) => void
 }
 
 const EMPTY: GeoJSON.FeatureCollection = { type: 'FeatureCollection', features: [] }
+
+/**
+ * Круг на местности в виде полигона.
+ * <p>
+ * Радиус задаётся в метрах, а координаты — в градусах, поэтому по долготе он делится
+ * на косинус широты: на широте Москвы градус долготы почти вдвое короче градуса широты.
+ * Шестьдесят четыре вершины — на глаз уже окружность при любом масштабе карты.
+ */
+function circle(lon: number, lat: number, radiusM: number): GeoJSON.Polygon {
+  const points: GeoJSON.Position[] = []
+  const latDegrees = radiusM / 111_320
+  const lonDegrees = latDegrees / Math.max(Math.cos((lat * Math.PI) / 180), 1e-6)
+  for (let i = 0; i <= 64; i++) {
+    const angle = (i / 64) * 2 * Math.PI
+    points.push([lon + lonDegrees * Math.cos(angle), lat + latDegrees * Math.sin(angle)])
+  }
+  return { type: 'Polygon', coordinates: [points] }
+}
+
+function zoneCollection(zones: ForbiddenZone[]): GeoJSON.FeatureCollection {
+  return {
+    type: 'FeatureCollection',
+    features: zones.map((zone, index) => ({
+      type: 'Feature',
+      geometry: circle(zone.lon, zone.lat, zone.radiusM),
+      properties: { index: index + 1, radius_m: zone.radiusM },
+    })),
+  }
+}
 
 /** Коллекция, пригодная для источника карты: без features MapLibre падает. */
 function safe(collection: GeoJSON.FeatureCollection | null): GeoJSON.FeatureCollection {
@@ -35,6 +71,7 @@ function safe(collection: GeoJSON.FeatureCollection | null): GeoJSON.FeatureColl
  */
 export function MapView({
   scene, result, activeVariant, showBasemap, fitKey, selectedFeatureId,
+  zones, placingZone, onPlaceZone,
 }: Props) {
   const container = useRef<HTMLDivElement>(null)
   const map = useRef<MapLibreMap | null>(null)
@@ -46,9 +83,15 @@ export function MapView({
   const sceneRef = useRef(scene)
   const resultRef = useRef(result)
   const variantRef = useRef(activeVariant)
+  const zonesRef = useRef(zones)
+  const placingRef = useRef(placingZone)
+  const placeHandlerRef = useRef(onPlaceZone)
   sceneRef.current = scene
   resultRef.current = result
   variantRef.current = activeVariant
+  zonesRef.current = zones
+  placingRef.current = placingZone
+  placeHandlerRef.current = onPlaceZone
 
   // --- создание карты -----------------------------------------------------------------
   useEffect(() => {
@@ -67,10 +110,15 @@ export function MapView({
     instance.on('load', () => {
       instance.addSource(SOURCE_IDS.scene, { type: 'geojson', data: safe(sceneRef.current) })
       instance.addSource(SOURCE_IDS.result, { type: 'geojson', data: safe(resultRef.current) })
+      instance.addSource(SOURCE_IDS.zones, {
+        type: 'geojson', data: zoneCollection(zonesRef.current),
+      })
       addSceneLayers(instance)
       addResultLayers(instance)
+      addZoneLayers(instance)
       addHighlightLayer(instance)
-      attachPopups(instance)
+      attachPopups(instance, placingRef)
+      attachZonePlacement(instance, placingRef, placeHandlerRef)
       applyVariantFilter(instance, variantRef.current)
       ready.current = true
 
@@ -81,6 +129,11 @@ export function MapView({
     })
 
     map.current = instance
+    // Карта доступна из консоли браузера и из сквозных тестов: тест должен уметь
+    // ткнуть в заданную географическую точку, а пересчитывать проекцию у себя —
+    // значит проверять свою арифметику вместо поведения сервиса. В работе сервиса
+    // эта ссылка ни на что не влияет.
+    ;(window as unknown as { heatrouteMap?: MapLibreMap }).heatrouteMap = instance
     return () => {
       instance.remove()
       map.current = null
@@ -103,6 +156,22 @@ export function MapView({
     const source = instance.getSource(SOURCE_IDS.result) as maplibregl.GeoJSONSource | undefined
     source?.setData(safe(result))
   }, [result])
+
+  // --- запретные зоны -----------------------------------------------------------------------
+  useEffect(() => {
+    const instance = map.current
+    if (!instance || !ready.current) return
+    const source = instance.getSource(SOURCE_IDS.zones) as maplibregl.GeoJSONSource | undefined
+    source?.setData(zoneCollection(zones))
+  }, [zones])
+
+  // Курсор — единственный признак того, что щелчок сейчас поставит зону, а не откроет
+  // карточку объекта. Без него режим незаметен, и на демонстрации это сбивает.
+  useEffect(() => {
+    const instance = map.current
+    if (!instance || !ready.current) return
+    instance.getCanvas().style.cursor = placingZone ? 'crosshair' : ''
+  }, [placingZone])
 
   // --- фильтр по варианту -------------------------------------------------------------------
   useEffect(() => {
@@ -391,6 +460,54 @@ function addResultLayers(map: MapLibreMap) {
  * Отдельный слой, а не изменение краски существующего, — иначе пришлось бы
  * пересобирать выражения цвета при каждом выборе строки.
  */
+/**
+ * Слои запретных зон.
+ * <p>
+ * Рисуются поверх исходной обстановки, но под новой сетью: зона — это ограничение,
+ * а не результат, и заслонять построенную трассу она не должна. Штриховая граница
+ * отличает её от водных объектов и застройки, которые приходят из данных.
+ */
+function addZoneLayers(map: MapLibreMap) {
+  map.addLayer({
+    id: 'zone-fill',
+    type: 'fill',
+    source: SOURCE_IDS.zones,
+    paint: {
+      'fill-color': COLORS.forbiddenZone,
+      'fill-opacity': 0.14,
+    },
+  })
+  map.addLayer({
+    id: 'zone-outline',
+    type: 'line',
+    source: SOURCE_IDS.zones,
+    paint: {
+      'line-color': COLORS.forbiddenZone,
+      'line-width': 1.6,
+      'line-dasharray': [3, 2],
+      'line-opacity': 0.85,
+    },
+  })
+}
+
+/**
+ * Постановка зоны щелчком по карте.
+ * <p>
+ * Обработчик ставится один раз и читает режим из ссылки, а не из замыкания: иначе
+ * при каждом переключении режима пришлось бы снимать и вешать слушатель заново,
+ * а MapLibre в этот момент уже обрабатывает щелчок.
+ */
+function attachZonePlacement(
+  map: MapLibreMap,
+  placing: { current: boolean },
+  handler: { current: (lon: number, lat: number) => void },
+) {
+  map.on('click', (event) => {
+    if (!placing.current) return
+    handler.current(event.lngLat.lng, event.lngLat.lat)
+  })
+}
+
 function addHighlightLayer(map: MapLibreMap) {
   map.addLayer({
     id: 'highlight-line',
@@ -420,7 +537,7 @@ function addHighlightLayer(map: MapLibreMap) {
 }
 
 /** Всплывающая карточка по щелчку: все атрибуты объекта так, как они уйдут в выгрузку. */
-function attachPopups(map: MapLibreMap) {
+function attachPopups(map: MapLibreMap, placing: { current: boolean }) {
   const clickable = [
     'proposed-line',
     'recon-line',
@@ -440,15 +557,16 @@ function attachPopups(map: MapLibreMap) {
 
   clickable.forEach((layer) => {
     map.on('click', layer, (event) => {
+      if (placing.current) return
       const feature = event.features?.[0]
       if (!feature) return
       popup.setLngLat(event.lngLat).setHTML(describe(feature.properties ?? {})).addTo(map)
     })
     map.on('mouseenter', layer, () => {
-      map.getCanvas().style.cursor = 'pointer'
+      map.getCanvas().style.cursor = placing.current ? 'crosshair' : 'pointer'
     })
     map.on('mouseleave', layer, () => {
-      map.getCanvas().style.cursor = ''
+      map.getCanvas().style.cursor = placing.current ? 'crosshair' : ''
     })
   })
 }

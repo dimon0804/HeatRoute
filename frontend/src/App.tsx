@@ -1,12 +1,13 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { api, ApiError } from './api/client'
-import type { Dataset, Job } from './api/types'
+import type { Dataset, ForbiddenZone, Job } from './api/types'
 import { DatasetPanel } from './components/DatasetPanel'
 import { DiagnosticsPanel } from './components/DiagnosticsPanel'
 import { Legend } from './components/Legend'
 import { MapView } from './components/MapView'
 import { SegmentsPanel } from './components/SegmentsPanel'
 import { VariantsPanel } from './components/VariantsPanel'
+import { ZonesPanel } from './components/ZonesPanel'
 import { Badge, Button, Progress } from './components/ui'
 import { duration, JOB_STATUS_LABELS } from './lib/format'
 
@@ -40,6 +41,9 @@ export default function App() {
   const [error, setError] = useState<string | null>(null)
   const [fitKey, setFitKey] = useState<string | null>(null)
   const [selectedFeatureId, setSelectedFeatureId] = useState<string | null>(null)
+  const [zones, setZones] = useState<ForbiddenZone[]>([])
+  const [zoneRadius, setZoneRadius] = useState(40)
+  const [placingZone, setPlacingZone] = useState(false)
 
   // --- список наборов при старте ---------------------------------------------------------
   useEffect(() => {
@@ -122,12 +126,17 @@ export default function App() {
     setSelectedFeatureId(null)
     setTab('variants')
     try {
-      const created = await api.submitJob(dataset.id, withDepth)
+      const created = await api.submitJob(dataset.id, withDepth, zones)
       setJob(created)
     } catch (e) {
       setError(e instanceof ApiError ? e.message : (e as Error).message)
     }
-  }, [dataset, withDepth])
+  }, [dataset, withDepth, zones])
+
+  // --- запретные зоны ---------------------------------------------------------------------
+  const handlePlaceZone = useCallback((lon: number, lat: number) => {
+    setZones((prev) => [...prev, { lon, lat, radiusM: zoneRadius }])
+  }, [zoneRadius])
 
   // --- опрос состояния расчёта ------------------------------------------------------------
   useEffect(() => {
@@ -277,6 +286,18 @@ export default function App() {
             )}
           </div>
 
+          <div className="shrink-0">
+            <ZonesPanel
+              zones={zones}
+              radiusM={zoneRadius}
+              placing={placingZone}
+              onRadiusChange={setZoneRadius}
+              onTogglePlacing={() => setPlacingZone((v) => !v)}
+              onRemove={(index) => setZones((prev) => prev.filter((_, i) => i !== index))}
+              onClear={() => setZones([])}
+            />
+          </div>
+
           {(job?.status === 'RUNNING' || job?.status === 'QUEUED') && (
             <div className="shrink-0 border-t border-edge px-4 py-3">
               <Progress value={job.progress} label={job.stage ?? 'Подготовка'} />
@@ -293,6 +314,9 @@ export default function App() {
             showBasemap={basemap}
             fitKey={fitKey}
             selectedFeatureId={selectedFeatureId}
+            zones={zones}
+            placingZone={placingZone}
+            onPlaceZone={handlePlaceZone}
           />
           <Legend />
         </main>

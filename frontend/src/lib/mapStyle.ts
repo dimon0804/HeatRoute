@@ -22,6 +22,7 @@ export const COLORS = {
   chamberReconstruction: '#ffd23f',
   technicalNode: '#c9d6e4',
   depthCrossing: '#a78bfa',
+  forbiddenZone: '#ff4d6d',
   highlight: '#ffffff',
 } as const
 
@@ -61,6 +62,7 @@ export const OSM_SOURCE = {
 export const SOURCE_IDS = {
   scene: 'scene',
   result: 'result',
+  zones: 'forbidden-zones',
   osm: 'osm',
 } as const
 
@@ -79,6 +81,7 @@ export const LEGEND: LegendItem[] = [
   { color: COLORS.existingChamber, label: 'Существующая тепловая камера', shape: 'circle', group: 'Исходные данные' },
   { color: COLORS.source, label: 'Источник теплоснабжения', shape: 'circle', group: 'Исходные данные' },
   { color: COLORS.oksPoint, label: 'Точка подключения перспективного ОКС', shape: 'circle', group: 'Исходные данные' },
+  { color: COLORS.forbiddenZone, label: 'Запретная зона, задана вручную', shape: 'dashed', group: 'Исходные данные' },
 
   { color: COLORS.proposed, label: 'Новый участок, обычная прокладка', shape: 'line', group: 'Новая сеть' },
   { color: COLORS.proposedSpecial, label: 'Новый участок, специальный проход', shape: 'line', group: 'Новая сеть' },
