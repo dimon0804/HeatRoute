@@ -87,6 +87,7 @@ public class WorkStatementWriter {
         writeChambers(writer, rows);
         writeTieIns(writer, rows);
         writeReconstruction(writer, rows);
+        writeDepthCrossings(writer, rows);
         writeDiameterSummary(writer, rows);
         writeTotals(writer, rows);
 
@@ -216,6 +217,44 @@ public class WorkStatementWriter {
     }
 
     /**
+     * Пересечения по глубине — только в расчёте с глубиной; в плоском разделе не будет.
+     * <p>
+     * Денег этот раздел не добавляет: стоимость заглубления уже сидит в участках
+     * через коэффициент по глубине. Но проектировщику нужен перечень мест, где трасса
+     * расходится с существующими коммуникациями по вертикали, — по нему делают
+     * рабочие чертежи узлов.
+     */
+    private void writeDepthCrossings(Writer w, List<Row> rows) throws IOException {
+        List<Row> crossings = of(rows, "depth_crossing");
+        if (crossings.isEmpty()) {
+            return;
+        }
+        line(w, "ПЕРЕСЕЧЕНИЯ ПО ГЛУБИНЕ");
+        line(w, "№", "Участок", "Пикет, м", "Пересекаемый объект", "Тип", "Проход",
+                "Глубина сети, м", "Глубина объекта, м", "Просвет, м", "Требуется, м",
+                "Норма выдержана");
+
+        int index = 0;
+        for (Row row : crossings) {
+            double actual = row.number("actual_clearance");
+            double required = row.number("required_clearance");
+            line(w,
+                    String.valueOf(++index),
+                    row.text("segment_id"),
+                    decimal(row.number("station"), 1),
+                    row.text("utility_id"),
+                    objectLabel(row.text("utility_type")),
+                    "above".equals(row.text("passage")) ? "сверху" : "снизу",
+                    decimal(row.number("new_depth"), 1),
+                    decimal(row.number("utility_depth"), 1),
+                    decimal(actual, 2),
+                    decimal(required, 2),
+                    required <= 0 || actual + 1e-6 >= required ? "да" : "НЕТ");
+        }
+        line(w, "");
+    }
+
+    /**
      * Свод по условным диаметрам — то, ради чего ведомость и открывают: объём труб
      * одного диаметра определяет закупку.
      */
@@ -303,13 +342,18 @@ public class WorkStatementWriter {
     }
 
     private static String objectLabel(String type) {
-        if ("heat_chamber".equals(type)) {
-            return "тепловая камера";
+        if (type == null) {
+            return "";
         }
-        if ("heat_network".equals(type)) {
-            return "участок сети";
-        }
-        return type == null ? "" : type;
+        Map<String, String> labels = new LinkedHashMap<>();
+        labels.put("heat_chamber", "тепловая камера");
+        labels.put("heat_network", "участок сети");
+        labels.put("water", "водный объект");
+        labels.put("gas", "газопровод");
+        labels.put("power_cable", "силовой кабель");
+        labels.put("road", "дорога");
+        labels.put("tram_tracks", "трамвайные пути");
+        return labels.getOrDefault(type, type);
     }
 
     /** Глубина участка: одно число, если она постоянна, иначе диапазон. */

@@ -118,6 +118,40 @@ class WorkStatementWriterTest {
     }
 
     @Test
+    @DisplayName("Пересечения по глубине попадают в ведомость с отметкой о норме")
+    void depthCrossingsAreListed() throws Exception {
+        String text = statement(List.of(
+                segment("s1", 200, 100.0, 12_000_000, "base"),
+                new WorkStatementWriter.Row("depth_crossing", "dc1", Map.of(
+                        "segment_id", "s1", "station", 42.0,
+                        "utility_id", "121", "utility_type", "heat_network",
+                        "passage", "above", "new_depth", 2.0, "utility_depth", 3.0,
+                        "actual_clearance", 0.55, "required_clearance", 0.5)),
+                new WorkStatementWriter.Row("depth_crossing", "dc2", Map.of(
+                        "segment_id", "s1", "station", 88.0,
+                        "utility_id", "122", "utility_type", "heat_network",
+                        "passage", "above", "new_depth", 3.0, "utility_depth", 3.0,
+                        "actual_clearance", -0.18, "required_clearance", 0.5))));
+
+        assertThat(text).contains("ПЕРЕСЕЧЕНИЯ ПО ГЛУБИНЕ");
+        assertThat(text).contains("сверху");
+        assertThat(text)
+                .as("выдержанный просвет отмечен как выдержанный")
+                .contains("0,55;0,50;да");
+        assertThat(text)
+                .as("невыдержанный виден сразу, а не вычисляется читателем")
+                .contains("-0,18;0,50;НЕТ");
+    }
+
+    @Test
+    @DisplayName("В плоском расчёте раздела по глубине нет")
+    void noDepthSectionWithoutCrossings() throws Exception {
+        String text = statement(List.of(segment("s1", 200, 100.0, 12_000_000, "base")));
+
+        assertThat(text).doesNotContain("ПЕРЕСЕЧЕНИЯ ПО ГЛУБИНЕ");
+    }
+
+    @Test
     @DisplayName("Точка с запятой внутри описания не ломает столбцы")
     void separatorInsideTextIsQuoted() throws Exception {
         ByteArrayOutputStream out = new ByteArrayOutputStream();
