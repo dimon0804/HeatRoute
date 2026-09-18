@@ -23,7 +23,7 @@
 | Стоимость | 287 959 811 руб. |
 | Показатель ранжирования S | **13,895** |
 | Время расчёта | около 20 с |
-| Тестов | 53 на бэкенде + 3 сквозных в браузере |
+| Тестов | 58 на бэкенде + 5 сквозных в браузере |
 
 ---
 
@@ -46,7 +46,7 @@ docker-compose up -d --build
 
 ```bash
 cd backend  && mvn spring-boot:run -Dspring-boot.run.profiles=nodb   # без базы данных
-cd backend  && mvn test                                             # 53 теста
+cd backend  && mvn test                                             # 58 тестов
 cd frontend && npm run dev                                          # сервер разработки
 cd frontend && npm run e2e                                          # сквозные тесты в браузере
 ```

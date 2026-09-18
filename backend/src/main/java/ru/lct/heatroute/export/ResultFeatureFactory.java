@@ -166,6 +166,9 @@ public class ResultFeatureFactory {
         p.put("object_type", "depth_crossing");
         p.put("variant_id", variant.getVariantId());
         p.put("segment_id", c.getSegmentId());
+        // Где именно на участке: без этого пересечение не разместить на продольном
+        // профиле, а по одной только точке на карте его место в разрезе не прочесть.
+        p.put("station", round(c.getStation()));
         p.put("utility_id", c.getUtilityId());
         p.put("utility_type", c.getUtilityType());
         p.put("passage", c.getPassage() == ru.lct.heatroute.depth.UtilityCrossing.Passage.ABOVE

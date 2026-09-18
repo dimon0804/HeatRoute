@@ -496,6 +496,7 @@ function describe(props: Record<string, unknown>): string {
   if (props.passage) {
     add('Прохождение', props.passage === 'above' ? 'сверху' : 'снизу')
   }
+  if (props.station != null) add('Положение на участке', `${props.station} м от начала`)
   if (props.new_depth != null) add('Глубина новой сети', `${props.new_depth} м`)
   if (props.utility_depth != null) add('Глубина коммуникации', `${props.utility_depth} м`)
   if (props.actual_clearance != null) {

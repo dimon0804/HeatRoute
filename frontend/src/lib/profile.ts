@@ -116,13 +116,13 @@ export function buildLongProfile(
     const to = num(s.depth_end)
     if (points.length === 0) points.push({ distance, depth: from })
     if (length > 0) maxSlope = Math.max(maxSlope, Math.abs(to - from) / length)
-    // Пересечение лежит внутри участка; точного положения выгрузка не хранит,
-    // но участок вокруг пересечения выделен отдельно и идёт площадкой,
-    // поэтому середина — верное место.
+    // Положение внутри участка берётся из выгрузки; середина — запасной вариант
+    // для результатов, посчитанных до появления этого атрибута.
     for (const c of crossingsBySegment.get(String(s.id)) ?? []) {
+      const station = c.station == null ? length / 2 : num(c.station)
       chainCrossings.push({
         id: String(c.id),
-        distance: distance + length / 2,
+        distance: distance + Math.max(0, Math.min(length, station)),
         depth: num(c.new_depth),
         passage: c.passage === 'below' ? 'below' : 'above',
         utilityType: String(c.utility_type),

@@ -103,6 +103,8 @@ export interface DepthCrossingProps {
   object_type: 'depth_crossing'
   variant_id: string
   segment_id: string
+  /** Расстояние от начала участка до пересечения, м. */
+  station: number
   utility_id: string
   utility_type: string
   passage: 'above' | 'below'
