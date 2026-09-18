@@ -98,6 +98,12 @@ export const api = {
     return `${BASE}/v1/jobs/${jobId}/result.geojson`
   },
 
+  /** Ведомость объёмов работ по варианту — таблица для Excel. */
+  statementUrl(jobId: string, variantCode?: string | null): string {
+    const suffix = variantCode ? `?variantCode=${encodeURIComponent(variantCode)}` : ''
+    return `${BASE}/v1/jobs/${jobId}/statement.csv${suffix}`
+  },
+
   /** Результат расчёта как GeoJSON — для отрисовки на карте. */
   async fetchResult(jobId: string): Promise<GeoJSON.FeatureCollection> {
     const response = await fetch(`${BASE}/v1/jobs/${jobId}/result.geojson`)

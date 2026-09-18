@@ -274,6 +274,8 @@ export default function App() {
                 activeVariant={activeVariant}
                 onSelectVariant={setActiveVariant}
                 onExport={() => job && window.open(api.resultUrl(job.id), '_blank')}
+                onExportStatement={() => job
+                  && window.open(api.statementUrl(job.id, activeVariant), '_blank')}
               />
             )}
             {tab === 'segments' && (

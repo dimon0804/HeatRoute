@@ -16,6 +16,7 @@ import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
+import io.swagger.v3.oas.annotations.Parameter;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
@@ -98,6 +99,26 @@ public class JobController {
         return ResponseEntity.ok()
                 .header(HttpHeaders.CONTENT_DISPOSITION,
                         "attachment; filename=\"heatroute_" + id + ".geojson\"")
+                .body(body);
+    }
+
+    @GetMapping(value = "/{id}/statement.csv", produces = "text/csv; charset=UTF-8")
+    @Operation(summary = "Ведомость объёмов работ",
+            description = "Таблица для Excel: перечень новых участков с диаметром, длиной "
+                    + "и стоимостью, тепловые камеры, врезки, реконструкция, свод по условным "
+                    + "диаметрам и итог. Выгрузка GeoJSON адресована ГИС, а смету считают "
+                    + "по этому документу. Без параметра берётся вариант, занявший первое место.")
+    public ResponseEntity<StreamingResponseBody> statement(
+            @PathVariable UUID id,
+            @RequestParam(required = false)
+            @Parameter(description = "Код варианта, например v2; по умолчанию — лучший")
+            String variantCode) {
+        calculations.require(id);
+        StreamingResponseBody body = out -> export.streamStatement(id, variantCode, out);
+        String suffix = variantCode == null || variantCode.isEmpty() ? "best" : variantCode;
+        return ResponseEntity.ok()
+                .header(HttpHeaders.CONTENT_DISPOSITION,
+                        "attachment; filename=\"heatroute_" + id + "_" + suffix + ".csv\"")
                 .body(body);
     }
 

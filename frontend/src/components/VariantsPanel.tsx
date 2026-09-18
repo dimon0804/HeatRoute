@@ -7,6 +7,8 @@ interface Props {
   activeVariant: string | null
   onSelectVariant: (code: string | null) => void
   onExport: () => void
+  /** Ведомость объёмов работ по выбранному варианту. */
+  onExportStatement: () => void
 }
 
 /**
@@ -16,7 +18,9 @@ interface Props {
  * ранжирование. Поэтому здесь не просто список: у каждого варианта расписаны
  * все шесть составляющих стоимости и показано, из чего складывается показатель S.
  */
-export function VariantsPanel({ job, activeVariant, onSelectVariant, onExport }: Props) {
+export function VariantsPanel({
+  job, activeVariant, onSelectVariant, onExport, onExportStatement,
+}: Props) {
   if (!job) {
     return (
       <Section title="Варианты подключения">
@@ -49,7 +53,19 @@ export function VariantsPanel({ job, activeVariant, onSelectVariant, onExport }:
         title="Варианты подключения"
         hint="Чем меньше показатель S, тем выше вариант"
         stackRight
-        right={<Button variant="ghost" onClick={onExport}>Выгрузить результат в GeoJSON</Button>}
+        right={(
+          <div className="flex flex-col items-end gap-1.5">
+            <Button variant="ghost" onClick={onExport}>Выгрузить результат в GeoJSON</Button>
+            <Button
+              variant="ghost"
+              onClick={onExportStatement}
+              title="Перечень участков, камер, врезок и реконструкции со сводом
+                     по диаметрам и итогом — таблица для Excel"
+            >
+              Ведомость объёмов работ
+            </Button>
+          </div>
+        )}
       >
         <div className="mb-3 flex items-center gap-2">
           <Button
