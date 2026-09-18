@@ -1,7 +1,8 @@
 package ru.lct.heatroute.variant;
 
 import org.junit.jupiter.api.DisplayName;
-import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.test.context.ActiveProfiles;
@@ -51,11 +52,12 @@ class ReachabilityDiagnosticTest {
     @Autowired
     TieInCandidateFinder tieInFinder;
 
-    @Test
+    @ParameterizedTest(name = "{0}")
+    @ValueSource(strings = {"/samples/dataset_lct2026.geojson", "/samples/dataset_full_spec.geojson"})
     @DisplayName("Каждая точка подключения достижима и без транзита через чужие терминалы")
-    void terminalsReachableWithoutTerminalTransit() throws Exception {
+    void terminalsReachableWithoutTerminalTransit(String sample) throws Exception {
         SceneAssembler.Collector collector = new SceneAssembler.Collector();
-        try (InputStream in = getClass().getResourceAsStream("/samples/dataset_lct2026.geojson")) {
+        try (InputStream in = getClass().getResourceAsStream(sample)) {
             parser.parse(Objects.requireNonNull(in), collector::accept);
         }
         InputScene scene = assembler.assemble(collector);
@@ -94,7 +96,7 @@ class ReachabilityDiagnosticTest {
         RoutingGraph.Frontier noTransit = graph.dijkstra(Set.of(root), Set.of(), terminalNodes);
 
         System.out.println();
-        System.out.println("=========== ДОСТИЖИМОСТЬ ТОЧЕК ПОДКЛЮЧЕНИЯ ===========");
+        System.out.println("===== ДОСТИЖИМОСТЬ ТОЧЕК ПОДКЛЮЧЕНИЯ: " + sample + " =====");
         System.out.printf("%-6s %14s %14s %8s%n", "ОКС", "обычный граф", "без транзита", "степень");
         List<String> lostWithoutTransit = new ArrayList<>();
         for (FutureOks oks : scene.getFutureOks()) {

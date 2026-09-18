@@ -465,6 +465,12 @@ public class VariantPlanner {
         // запускается несколько раз с разными затравками, а лучшее дерево по длине
         // отбирается здесь. Разброс между запусками на конкурсном наборе достигает
         // десятых долей, и брать первый попавшийся результат незачем.
+        // Клиренс для отводов от новых камер берётся по тому же диаметру, что и граф:
+        // маршрут, допустимый для магистрали, допустим и для любой ветви.
+        int designDnForClearance = catalog.selectForFlow(
+                        group.stream().mapToDouble(SteinerTreeBuilder.Terminal::getFlowTph).sum())
+                .map(DiameterRow::getDn).orElse(catalog.largest().getDn());
+
         SteinerTreeBuilder.Result built = null;
         double bestLength = Double.POSITIVE_INFINITY;
         int restarts = Math.max(1, routingProps.getSteinerRestarts());
@@ -472,7 +478,9 @@ public class VariantPlanner {
             SteinerTreeBuilder.Terminal seed = attempt == 0 || attempt > group.size()
                     ? null : group.get((attempt - 1) % group.size());
             SteinerTreeBuilder.Result trial = treeBuilder.build(graph,
-                    candidate.getGraphNodeIndex(), group, rootSpareDegree, seed);
+                    candidate.getGraphNodeIndex(), group, rootSpareDegree, seed,
+                    (from, to, exemptOks) -> field.isPassable(from, to, designDnForClearance,
+                            exemptOks));
             if (trial.isEmpty()) {
                 continue;
             }

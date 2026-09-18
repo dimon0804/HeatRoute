@@ -346,9 +346,68 @@ public class SceneAssembler {
         List<String> flowFromPoint = new ArrayList<>();
         List<String> noFlow = new ArrayList<>();
         List<String> orphanPoints = new ArrayList<>();
+        List<String> multiPoint = new ArrayList<>();
 
-        // --- точки подключения ведут разбор: без них подключать нечего ---------------
+        // Несколько точек подключения могут относиться к одному перспективному ОКС:
+        // в здании бывает не один ИТП. Расход при этом задан на объекте, а не на точках,
+        // и делить его между ними не на чем. Точки считаются равноценными вводами,
+        // и берётся ближайший к существующей сети — остальные в расчёт не идут.
+        Map<String, List<RawFeature>> pointsByOks = new LinkedHashMap<>();
+        List<RawFeature> standalonePoints = new ArrayList<>();
         for (RawFeature pointFeature : c.connectionPoints) {
+            String oksId = pointFeature.str("oks_id");
+            if (oksId != null && polygons.containsKey(oksId)) {
+                pointsByOks.computeIfAbsent(oksId, k -> new ArrayList<>()).add(pointFeature);
+            } else {
+                standalonePoints.add(pointFeature);
+            }
+        }
+
+        Geometry network = segments.isEmpty() ? null : Geo.FACTORY.createMultiLineString(
+                segments.stream().map(ExistingSegment::getGeometry).toArray(LineString[]::new));
+
+        for (Map.Entry<String, List<RawFeature>> entry : pointsByOks.entrySet()) {
+            String oksId = entry.getKey();
+            RawFeature polygon = polygons.remove(oksId);
+            List<RawFeature> candidates = entry.getValue();
+
+            RawFeature chosen = candidates.get(0);
+            if (candidates.size() > 1) {
+                if (network != null) {
+                    chosen = candidates.stream()
+                            .filter(f -> asPoint(f.geometry()) != null)
+                            .min(Comparator.comparingDouble(
+                                    f -> asPoint(f.geometry()).distance(network)))
+                            .orElse(chosen);
+                }
+                multiPoint.add(oksId + ":" + candidates.size());
+            }
+            Point p = asPoint(chosen.geometry());
+            if (p == null) {
+                diag.warning("connectionPoint.geometry",
+                        "Геометрия точки подключения не является точкой и пропущена",
+                        List.of(requireId(chosen, "oks_connection_point", diag)));
+                continue;
+            }
+            double flow = polygon.num("flow_tph").orElse(0d);
+            if (flow <= 0) {
+                noFlow.add(oksId);
+            }
+            out.add(FutureOks.builder()
+                    .id(oksId)
+                    .footprint(polygon.geometry())
+                    .connectionPoint(p)
+                    .connectionPointId(requireId(chosen, "oks_connection_point", diag))
+                    .flowTph(flow)
+                    .heatLoad(polygon.num("heat_load").orElse(null))
+                    .flowSource(flow > 0 ? FutureOks.FlowSource.OKS_FUTURE
+                            : FutureOks.FlowSource.ASSUMED_ZERO)
+                    .footprintSource(FutureOks.FootprintSource.OKS_FUTURE)
+                    .build());
+        }
+
+        // --- точки без собственного полигона ведут разбор сами ------------------------
+        for (RawFeature pointFeature : standalonePoints) {
             String pointId = requireId(pointFeature, "oks_connection_point", diag);
             Point p = asPoint(pointFeature.geometry());
             if (p == null) {
@@ -357,7 +416,7 @@ public class SceneAssembler {
                 continue;
             }
             String oksId = pointFeature.str("oks_id");
-            RawFeature polygon = oksId == null ? null : polygons.remove(oksId);
+            RawFeature polygon = null;
 
             Double flow = null;
             FutureOks.FlowSource flowSource = null;
@@ -399,10 +458,7 @@ public class SceneAssembler {
 
         // --- полигоны без своей точки подключения ------------------------------------
         if (!polygons.isEmpty()) {
-            if (props.isDeriveMissingConnectionPoint() && !segments.isEmpty()) {
-                Geometry network = Geo.FACTORY.createMultiLineString(
-                        segments.stream().map(ExistingSegment::getGeometry)
-                                .toArray(LineString[]::new));
+            if (props.isDeriveMissingConnectionPoint() && network != null) {
                 List<String> derived = new ArrayList<>();
                 for (Map.Entry<String, RawFeature> e : polygons.entrySet()) {
                     Geometry footprint = e.getValue().geometry();
@@ -435,6 +491,13 @@ public class SceneAssembler {
             }
         }
 
+        if (!multiPoint.isEmpty()) {
+            diag.assumption("oks.multipleConnectionPoints", String.format(
+                    "У %d перспективных ОКС несколько точек подключения. Расход задан "
+                            + "на объекте и делению между вводами не подлежит, поэтому "
+                            + "подключение выполняется через ближайшую к существующей сети точку",
+                    multiPoint.size()), multiPoint);
+        }
         if (!flowFromPoint.isEmpty()) {
             diag.assumption("oks.flowFromConnectionPoint", String.format(
                     "У %d перспективных ОКС расчётный расход взят с точки подключения: "
