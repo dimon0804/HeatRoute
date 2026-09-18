@@ -17,11 +17,16 @@ import ru.lct.heatroute.domain.result.NewSegment;
 import ru.lct.heatroute.domain.result.TechnicalNodeResult;
 import ru.lct.heatroute.geo.Geo;
 
+import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.Deque;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
+import java.util.stream.Collectors;
 
 /**
  * Дополнительная задача: трассировка тепловой сети с учётом глубины.
@@ -49,6 +54,9 @@ import java.util.Map;
 @Component
 public class DepthPlanner {
 
+    /** Насколько близко к точке врезки пересечение считается самим присоединением, м. */
+    private static final double TIE_IN_TOLERANCE_M = 1.0;
+
     private final ReferenceCatalog catalog;
 
     public DepthPlanner(ReferenceCatalog catalog) {
@@ -62,6 +70,18 @@ public class DepthPlanner {
         List<UtilityCrossing> crossings;
         /** Участки, для которых допустимый профиль в заданном диапазоне глубин не найден. */
         List<String> unresolved;
+    }
+
+    /**
+     * Объект, под которым новая сеть обязана идти не выше заданной глубины:
+     * дорога, трамвайные пути (таблица 5.1, {@code minTopBelowSurface}).
+     */
+    @Value
+    private static class SurfaceLimit {
+        String id;
+        Geometry geometry;
+        /** Верх габарита новой сети не выше этой глубины, м. */
+        double minDepth;
     }
 
     /** Существующая коммуникация с известной условной глубиной. */
@@ -78,38 +98,80 @@ public class DepthPlanner {
 
     public Result apply(CalculationVariant variant, InputScene scene) {
         List<Utility> utilities = collectUtilities(scene);
+        List<SurfaceLimit> surfaceLimits = collectSurfaceLimits(scene);
         if (utilities.isEmpty()) {
             log.debug("Коммуникаций с заданной условной глубиной в наборе нет; "
                     + "профиль строится на обычной глубине");
         }
 
         ReferenceProperties.Depth params = catalog.props().getDepth();
+        List<Coordinate> tieInPoints = variant.getTieIns().stream()
+                .map(t -> t.getLocation().getCoordinate())
+                .collect(Collectors.toList());
+
         List<NewSegment> segments = new ArrayList<>();
         List<TechnicalNodeResult> nodes = new ArrayList<>(variant.getTechnicalNodes());
         List<UtilityCrossing> crossings = new ArrayList<>();
         List<String> unresolved = new ArrayList<>();
         int nodeCounter = nodes.size();
 
-        for (NewSegment segment : variant.getSegments()) {
-            List<UtilityCrossing> onSegment = findCrossings(segment, utilities, params);
-            crossings.addAll(onSegment);
+        for (List<NewSegment> chain : chains(variant.getSegments())) {
+            // Пересечения всей цепочки в единой системе отсчёта: разбег под заглубление
+            // почти никогда не помещается внутри одного участка.
+            List<Placed> placed = new ArrayList<>();
+            double chainLength = 0;
+            for (int i = 0; i < chain.size(); i++) {
+                NewSegment segment = chain.get(i);
+                for (UtilityCrossing c : findCrossings(segment, utilities, surfaceLimits,
+                        params, tieInPoints)) {
+                    placed.add(new Placed(c, i, c.getStation(), chainLength + c.getStation()));
+                }
+                chainLength += segment.getLength();
+            }
+            placed.sort(Comparator.comparingDouble(Placed::getChainStation));
 
-            DepthProfile profile = buildProfile(segment, onSegment, params, unresolved);
-            List<NewSegment> parts = split(segment, profile, params);
-            segments.addAll(parts);
+            DepthProfile profile = buildProfile(chainLength, placed, params, unresolved);
 
-            // Технический узел там, где меняется глубина: раздел 3 ТП относит глубину
-            // к параметрам участка, а смена параметра делит линию.
-            for (int i = 0; i + 1 < parts.size(); i++) {
-                NewSegment part = parts.get(i);
-                Coordinate at = part.getGeometry().getCoordinates()[
-                        part.getGeometry().getNumPoints() - 1];
-                nodes.add(TechnicalNodeResult.builder()
-                        .id("tnd_" + variant.getVariantId() + "_" + (++nodeCounter))
-                        .variantId(variant.getVariantId())
-                        .location(Geo.point(at))
-                        .reason("смена глубины прокладки")
-                        .build());
+            double at = 0;
+            for (int i = 0; i < chain.size(); i++) {
+                NewSegment segment = chain.get(i);
+                List<NewSegment> parts = split(segment,
+                        subProfile(profile, at, at + segment.getLength()), params);
+
+                // Технический узел там, где меняется глубина: раздел 3 ТП относит глубину
+                // к параметрам участка, а смена параметра делит линию. Узел не только
+                // выгружается — он связывает части между собой, иначе разрезанный
+                // участок перестаёт быть непрерывной ниткой.
+                List<NewSegment> stitched = new ArrayList<>(parts.size());
+                String previousNode = segment.getStartNodeId();
+                for (int k = 0; k < parts.size(); k++) {
+                    NewSegment part = parts.get(k);
+                    String endNode = segment.getEndNodeId();
+                    if (k + 1 < parts.size()) {
+                        endNode = "tnd_" + variant.getVariantId() + "_" + (++nodeCounter);
+                        Coordinate node = part.getGeometry().getCoordinates()[
+                                part.getGeometry().getNumPoints() - 1];
+                        nodes.add(TechnicalNodeResult.builder()
+                                .id(endNode)
+                                .variantId(variant.getVariantId())
+                                .location(Geo.point(node))
+                                .reason("смена глубины прокладки")
+                                .build());
+                    }
+                    stitched.add(part.toBuilder()
+                            .startNodeId(previousNode)
+                            .endNodeId(endNode)
+                            .build());
+                    previousNode = endNode;
+                }
+                segments.addAll(stitched);
+
+                for (Placed p : placed) {
+                    if (p.getSegmentIndex() == i) {
+                        crossings.add(reconcile(p, profile, stitched, segment));
+                    }
+                }
+                at += segment.getLength();
             }
         }
 
@@ -119,15 +181,203 @@ public class DepthPlanner {
                 .depthCrossings(crossings)
                 .build();
 
-        log.debug("Профиль по глубине: участков {} → {}, пересечений {}, без решения {}",
+        log.debug("Профиль по глубине: участков {} - {}, пересечений {}, без решения {}",
                 variant.getSegments().size(), segments.size(), crossings.size(),
                 unresolved.size());
         return new Result(updated, crossings, unresolved);
     }
 
     // =================================================================================
+    //  Непрерывные цепочки участков
+    // =================================================================================
+
+    /** Пересечение, привязанное к своему месту в цепочке. */
+    @Value
+    private static class Placed {
+        UtilityCrossing crossing;
+        /** Номер участка цепочки, на котором лежит пересечение. */
+        int segmentIndex;
+        /** Расстояние от начала этого участка, м. */
+        double localStation;
+        /** Расстояние от начала всей цепочки, м. */
+        double chainStation;
+    }
+
+    /**
+     * Разбивает дерево новой сети на непрерывные цепочки участков.
+     * <p>
+     * Профиль по глубине нельзя строить в границах одного участка: при обычной глубине
+     * 3,0 м, проходе поверх коммуникации на 2,0 м и предельном уклоне 0,10 м/м на одно
+     * только заглубление нужно десять метров разбега, а участок делится материализацией
+     * по смене диаметра и способа прокладки и бывает короче. Разбег берётся с соседних
+     * участков той же нитки.
+     * <p>
+     * Цепочка обрывается в узле ветвления: там стоит тепловая камера, у которой одна
+     * отметка заложения на все примыкания, поэтому к узлу ветвления нитки приходят
+     * на обычной глубине.
+     */
+    private List<List<NewSegment>> chains(List<NewSegment> segments) {
+        Map<String, List<NewSegment>> outgoing = new LinkedHashMap<>();
+        Map<String, Integer> incoming = new LinkedHashMap<>();
+        for (NewSegment s : segments) {
+            outgoing.computeIfAbsent(s.getStartNodeId(), k -> new ArrayList<>()).add(s);
+            incoming.merge(s.getEndNodeId(), 1, Integer::sum);
+        }
+
+        Deque<NewSegment> starts = new ArrayDeque<>();
+        for (NewSegment s : segments) {
+            if (!isSimple(s.getStartNodeId(), outgoing, incoming)) {
+                starts.add(s);
+            }
+        }
+
+        List<List<NewSegment>> chains = new ArrayList<>();
+        Set<String> used = new HashSet<>();
+        while (!starts.isEmpty()) {
+            NewSegment head = starts.poll();
+            if (!used.add(head.getId())) {
+                continue;
+            }
+            List<NewSegment> chain = new ArrayList<>();
+            chain.add(head);
+            NewSegment current = head;
+            while (isSimple(current.getEndNodeId(), outgoing, incoming)) {
+                NewSegment next = outgoing.get(current.getEndNodeId()).get(0);
+                if (!used.add(next.getId())) {
+                    break;
+                }
+                chain.add(next);
+                current = next;
+            }
+            chains.add(chain);
+        }
+
+        // Страховка от замкнутого контура: дерево циклов не содержит, но выпасть
+        // из расчёта участок не должен ни при каких данных.
+        for (NewSegment s : segments) {
+            if (used.add(s.getId())) {
+                chains.add(List.of(s));
+            }
+        }
+        return chains;
+    }
+
+    /** Узел простого продолжения: ровно один вход и ровно один выход. */
+    private boolean isSimple(String nodeId, Map<String, List<NewSegment>> outgoing,
+                             Map<String, Integer> incoming) {
+        return incoming.getOrDefault(nodeId, 0) == 1
+                && outgoing.getOrDefault(nodeId, List.of()).size() == 1;
+    }
+
+    /** Часть профиля цепочки, приходящаяся на один участок, со своей нулевой отметкой. */
+    private DepthProfile subProfile(DepthProfile chain, double from, double to) {
+        List<DepthProfile.Point> points = new ArrayList<>();
+        points.add(new DepthProfile.Point(0, chain.depthAt(from)));
+        for (DepthProfile.Point point : chain.getPoints()) {
+            if (point.getStation() > from + 1e-6 && point.getStation() < to - 1e-6) {
+                points.add(new DepthProfile.Point(point.getStation() - from, point.getDepth()));
+            }
+        }
+        points.add(new DepthProfile.Point(Math.max(0, to - from), chain.depthAt(to)));
+        return new DepthProfile(dedupePoints(points));
+    }
+
+    /**
+     * Приводит пересечение к тому, что действительно построено.
+     * <p>
+     * Выгрузка обязана описывать сеть, а не намерение: после деления участка пересечение
+     * лежит уже на другом объекте, а если манёвр не поместился, труба проходит на обычной
+     * глубине — и просвет должен быть посчитан по ней, иначе проверяющий увидит величину,
+     * которой в сети нет.
+     */
+    private UtilityCrossing reconcile(Placed placed, DepthProfile profile,
+                                      List<NewSegment> parts, NewSegment origin) {
+        UtilityCrossing c = placed.getCrossing();
+        double actualDepth = round(profile.depthAt(placed.getChainStation()));
+        double newHeight = catalog.pairHeight(origin.getDiameter());
+        double clearance = c.getPassage() == UtilityCrossing.Passage.ABOVE
+                ? c.getUtilityDepthToTop() - (actualDepth + newHeight)
+                : actualDepth - (c.getUtilityDepthToTop() + c.getUtilityHeight());
+
+        String partId = parts.get(parts.size() - 1).getId();
+        double station = placed.getLocalStation();
+        double run = 0;
+        for (NewSegment part : parts) {
+            if (placed.getLocalStation() <= run + part.getLength() + 1e-6) {
+                partId = part.getId();
+                station = placed.getLocalStation() - run;
+                break;
+            }
+            run += part.getLength();
+        }
+
+        return new UtilityCrossing(round(station), c.getLocation(), partId,
+                c.getUtilityId(), c.getUtilityType(), c.getUtilityDepthToTop(),
+                c.getUtilityHeight(), c.getRequiredClearance(), c.getPassage(),
+                actualDepth, round(clearance));
+    }
+
+    /** Лежит ли точка в месте присоединения к существующей сети. */
+    private boolean atTieIn(Coordinate point, List<Coordinate> tieInPoints) {
+        for (Coordinate tieIn : tieInPoints) {
+            if (tieIn != null && tieIn.distance(point) <= TIE_IN_TOLERANCE_M) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    // =================================================================================
     //  Существующие коммуникации
     // =================================================================================
+
+    /**
+     * Ограничения по глубине от объектов поверхности.
+     * <p>
+     * Под проезжей частью и трамвайными путями верх габарита новой сети не должен быть
+     * выше заданной отметки. Обычная глубина 3,0 м это перекрывает, но проход поверх
+     * чужой коммуникации поднимает трассу — и вот там правило начинает работать.
+     * <p>
+     * На значениях таблицы 5.1 (1,0 м под дорогой, 1,2 м под путями) ограничение
+     * не срабатывает: самый высокий проход поверх коммуникации даёт около 2,0 м.
+     * Это защита от другого набора справочных данных, а не действующее ограничение
+     * на конкурсном наборе, и проверить её можно только подменой справочника.
+     */
+    private List<SurfaceLimit> collectSurfaceLimits(InputScene scene) {
+        List<SurfaceLimit> out = new ArrayList<>();
+        for (RestrictionObject restriction : scene.getRestrictions()) {
+            ReferenceProperties.RestrictionRow rule = restriction.getRule();
+            if (rule == null || rule.getVerticalRule() != VerticalRule.BELOW_SURFACE
+                    || rule.getMinTopBelowSurface() == null) {
+                continue;
+            }
+            out.add(new SurfaceLimit(restriction.getId(), restriction.getGeometry(),
+                    rule.getMinTopBelowSurface()));
+        }
+        return out;
+    }
+
+    /**
+     * Наименьшая допустимая глубина в точке.
+     * <p>
+     * Берётся по точке пересечения, а не по всей горизонтальной вставке: вставка
+     * шириной 4 м, а дорога или путь всегда шире, поэтому если пересечение попало
+     * внутрь полигона, туда же попадает и вставка.
+     */
+    private double minDepthAt(Coordinate point, List<SurfaceLimit> limits,
+                              ReferenceProperties.Depth params) {
+        double floor = params.getMinDepth();
+        if (limits.isEmpty()) {
+            return floor;
+        }
+        org.locationtech.jts.geom.Point p = Geo.point(point);
+        for (SurfaceLimit limit : limits) {
+            if (limit.getGeometry().intersects(p)) {
+                floor = Math.max(floor, limit.getMinDepth());
+            }
+        }
+        return floor;
+    }
 
     private List<Utility> collectUtilities(InputScene scene) {
         List<Utility> out = new ArrayList<>();
@@ -164,7 +414,9 @@ public class DepthPlanner {
     // =================================================================================
 
     private List<UtilityCrossing> findCrossings(NewSegment segment, List<Utility> utilities,
-                                                ReferenceProperties.Depth params) {
+                                                List<SurfaceLimit> surfaceLimits,
+                                                ReferenceProperties.Depth params,
+                                                List<Coordinate> tieInPoints) {
         List<UtilityCrossing> out = new ArrayList<>();
         LineString line = segment.getGeometry();
         double newHeight = catalog.pairHeight(segment.getDiameter());
@@ -175,9 +427,15 @@ public class DepthPlanner {
             }
             Geometry intersection = utility.getGeometry().intersection(line);
             for (Coordinate point : intersection.getCoordinates()) {
+                // Пересечение в точке врезки — это само присоединение, а не пересечение:
+                // новая сеть там и должна касаться существующей.
+                if (atTieIn(point, tieInPoints)) {
+                    continue;
+                }
                 double station = stationOf(line, point);
 
-                Choice choice = chooseDepth(utility, newHeight, params);
+                Choice choice = chooseDepth(utility, newHeight, params,
+                        minDepthAt(point, surfaceLimits, params));
                 if (choice == null) {
                     continue;
                 }
@@ -208,14 +466,14 @@ public class DepthPlanner {
      * он уменьшает глубину, а стоимость растёт только при заглублении глубже трёх метров.
      */
     private Choice chooseDepth(Utility utility, double newHeight,
-                               ReferenceProperties.Depth params) {
+                               ReferenceProperties.Depth params, double minDepth) {
         List<Choice> options = new ArrayList<>();
 
         if (utility.getRule() == VerticalRule.ABOVE_OR_BELOW) {
             // Сверху: низ новой сети выше верха коммуникации на требуемый просвет.
             double above = utility.getDepthToTop() - utility.getMinClearance() - newHeight;
             double aboveSnapped = snapDown(above, params);
-            if (aboveSnapped >= params.getMinDepth()) {
+            if (aboveSnapped >= minDepth) {
                 double clearance = utility.getDepthToTop() - (aboveSnapped + newHeight);
                 options.add(new Choice(UtilityCrossing.Passage.ABOVE, aboveSnapped,
                         clearance, catalog.depthCostFactor(aboveSnapped)));
@@ -234,7 +492,7 @@ public class DepthPlanner {
         } else if (utility.getRule() == VerticalRule.BELOW_SURFACE) {
             // Проход под объектом: ограничение задаёт минимальную глубину, обычная
             // глубина его и так перекрывает.
-            double depth = Math.max(params.getNormalDepth(), params.getMinDepth());
+            double depth = Math.max(params.getNormalDepth(), minDepth);
             options.add(new Choice(UtilityCrossing.Passage.BELOW, depth,
                     depth, catalog.depthCostFactor(depth)));
         }
@@ -250,10 +508,9 @@ public class DepthPlanner {
      * Профиль глубины вдоль участка: обычная глубина, заглубление или подъём к каждому
      * пересечению, горизонтальная вставка в зоне пересечения, возврат.
      */
-    private DepthProfile buildProfile(NewSegment segment, List<UtilityCrossing> crossings,
+    private DepthProfile buildProfile(double length, List<Placed> crossings,
                                       ReferenceProperties.Depth params,
                                       List<String> unresolved) {
-        double length = segment.getLength();
         double normal = params.getNormalDepth();
         if (crossings.isEmpty()) {
             return DepthProfile.flat(length, normal);
@@ -264,10 +521,11 @@ public class DepthPlanner {
         double cursor = 0;
         double currentDepth = normal;
 
-        for (UtilityCrossing crossing : crossings) {
+        for (Placed placed : crossings) {
+            UtilityCrossing crossing = placed.getCrossing();
             double half = params.getCrossingFlatHalf();
-            double flatFrom = crossing.getStation() - half;
-            double flatTo = crossing.getStation() + half;
+            double flatFrom = placed.getChainStation() - half;
+            double flatTo = placed.getChainStation() + half;
             double target = crossing.getNewDepth();
 
             // Уклон не круче заданного: на изменение глубины нужен разбег.
@@ -278,8 +536,8 @@ public class DepthPlanner {
                 // Разбега не хватает: участок слишком короткий для такого манёвра.
                 // Раздел 4 приложения требует отметить это, а не строить профиль круче
                 // допустимого уклона.
-                if (!unresolved.contains(segment.getId())) {
-                    unresolved.add(segment.getId());
+                if (!unresolved.contains(crossing.getSegmentId())) {
+                    unresolved.add(crossing.getSegmentId());
                 }
                 continue;
             }

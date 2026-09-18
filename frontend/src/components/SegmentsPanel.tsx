@@ -2,6 +2,7 @@ import { useMemo, useState } from 'react'
 import { flow, meters, money, RESTRICTION_LABELS } from '../lib/format'
 import { Badge, Empty, Section } from './ui'
 import { DepthCrossSection } from './DepthCrossSection'
+import { DepthProfile } from './DepthProfile'
 
 interface Props {
   result: GeoJSON.FeatureCollection | null
@@ -25,7 +26,9 @@ export function SegmentsPanel({
   const [tab, setTab] = useState<Tab>('segments')
 
   const rows = useMemo(() => {
-    if (!result?.features) return { segments: [], reconstruction: [], depth: [] }
+    if (!result?.features) {
+      return { segments: [], reconstruction: [], depth: [], depthMode: false }
+    }
     const match = (props: Record<string, unknown>) =>
       !activeVariant || props.variant_id === activeVariant
 
@@ -43,7 +46,12 @@ export function SegmentsPanel({
       .filter((f) => f.properties?.object_type === 'depth_crossing' && match(f.properties ?? {}))
       .map((f) => f.properties as Record<string, unknown>)
 
-    return { segments, reconstruction, depth }
+    // Расчёт по глубине мог пройти и не дать пересечений у этого варианта — это
+    // хороший результат, а не отсутствие расчёта, поэтому вкладка остаётся на месте.
+    const depthMode = result.features
+      .some((f) => f.properties?.object_type === 'depth_crossing')
+
+    return { segments, reconstruction, depth, depthMode }
   }, [result, activeVariant])
 
   const selectedCrossing = rows.depth.find((row) => String(row.id) === selectedFeatureId)
@@ -68,7 +76,7 @@ export function SegmentsPanel({
           ? 'Расход, условный диаметр, способ прокладки и стоимость. Щелчок по строке показывает участок на карте'
           : tab === 'reconstruction'
             ? 'Участки, которым после подключения не хватает пропускной способности'
-            : 'Где трасса проходит выше или ниже существующих коммуникаций. Щелчок по строке открывает разрез'
+            : 'Где трасса проходит выше или ниже существующих коммуникаций. Щелчок по строке открывает профиль и разрез'
       }
       stackRight
       right={
@@ -79,7 +87,7 @@ export function SegmentsPanel({
           <TabButton active={tab === 'reconstruction'} onClick={() => setTab('reconstruction')}>
             Реконструкция ({rows.reconstruction.length})
           </TabButton>
-          {rows.depth.length > 0 && (
+          {rows.depthMode && (
             <TabButton active={tab === 'depth'} onClick={() => setTab('depth')}>
               Глубина ({rows.depth.length})
             </TabButton>
@@ -131,6 +139,13 @@ export function SegmentsPanel({
           </div>
         )
       ) : tab === 'depth' ? (
+        rows.depth.length === 0 ? (
+          <Empty>
+            У этого варианта пересечений с существующими коммуникациями нет:
+            трасса идёт на обычной глубине 3,0 м. Пересечения есть у других вариантов —
+            переключите вариант в панели слева.
+          </Empty>
+        ) : (
         <div className="max-h-72 overflow-y-auto">
           <table className="w-full text-[12px]">
             <thead className="sticky top-0 bg-panel text-[11px] uppercase text-muted">
@@ -164,16 +179,31 @@ export function SegmentsPanel({
                     </Badge>
                   </td>
                   <td className="py-1 pr-2 text-right text-accent">{String(row.new_depth)} м</td>
-                  <td className="py-1 text-right text-slate-200 whitespace-nowrap">
-                    {String(row.actual_clearance)}
+                  <td className="py-1 text-right whitespace-nowrap">
+                    <span className={
+                      Number(row.actual_clearance) + 1e-6 < Number(row.required_clearance)
+                        ? 'text-tie' : 'text-slate-200'
+                    }>
+                      {String(row.actual_clearance)}
+                    </span>
                     <span className="text-muted"> / {String(row.required_clearance)} м</span>
                   </td>
                 </tr>
               ))}
             </tbody>
           </table>
-          {selectedCrossing && <DepthCrossSection crossing={selectedCrossing} />}
+          {selectedCrossing && (
+            <>
+              <DepthProfile
+                segments={rows.segments}
+                crossings={rows.depth}
+                focusSegmentId={String(selectedCrossing.segment_id)}
+              />
+              <DepthCrossSection crossing={selectedCrossing} />
+            </>
+          )}
         </div>
+        )
       ) : rows.reconstruction.length === 0 ? (
         <Empty>Реконструкция существующей сети не требуется.</Empty>
       ) : (

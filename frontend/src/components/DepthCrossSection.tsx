@@ -23,6 +23,7 @@ export function DepthCrossSection({ crossing }: Props) {
   const actual = Number(crossing.actual_clearance)
   const required = Number(crossing.required_clearance)
   const above = crossing.passage === 'above'
+  const ok = actual + 1e-6 >= required
 
   // Высота расчётного габарита той трубы, что лежит выше: разница отметок
   // за вычетом просвета.
@@ -129,10 +130,16 @@ export function DepthCrossSection({ crossing }: Props) {
 
       <p className="mt-1 text-[11px] leading-snug text-muted">
         Новая сеть проходит <span className="text-slate-200">{above ? 'сверху' : 'снизу'}</span>.
-        Просвет {actual.toFixed(2)} м при норме {required.toFixed(2)} м.
-        {above
-          ? ' Проход сверху выбран потому, что он выводит трассу выше трёх метров, где стоимость по глубине не растёт.'
-          : ' Проход снизу выбран потому, что сверху не выдержать минимальную глубину.'}
+        Просвет{' '}
+        <span className={ok ? 'text-slate-200' : 'text-tie'}>{actual.toFixed(2)} м</span>{' '}
+        при норме {required.toFixed(2)} м.
+        {ok
+          ? (above
+            ? ' Проход сверху выбран потому, что он выводит трассу выше трёх метров, где стоимость по глубине не растёт.'
+            : ' Проход снизу выбран потому, что сверху не выдержать минимальную глубину.')
+          : ' Норма не выдержана: пересечение приходится на первые метры нитки, и разбега'
+            + ' под смену глубины при уклоне не круче 0,10 м/м не хватает. Вариант с таким'
+            + ' пересечением понижен в ранжировании.'}
       </p>
     </div>
   )

@@ -163,6 +163,12 @@ function VariantCard({ variant, best, active, onSelect }: {
         {s.unconnectedOksIds.length > 0 && (
           <Badge tone="bad">не подключено: {s.unconnectedOksIds.length}</Badge>
         )}
+        {(variant.featureCounts?.depth_crossing ?? 0) > 0 && (
+          <Badge tone="info">
+            {plural(variant.featureCounts?.depth_crossing ?? 0,
+              'пересечение по глубине', 'пересечения по глубине', 'пересечений по глубине')}
+          </Badge>
+        )}
         {delta > 0 && <Badge tone="warn">+{moneyShort(delta)} к лучшему</Badge>}
       </div>
 

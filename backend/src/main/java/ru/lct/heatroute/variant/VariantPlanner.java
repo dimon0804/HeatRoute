@@ -238,7 +238,7 @@ public class VariantPlanner {
             produced = withProfile;
         }
 
-        List<CalculationVariant> ranked = rank(produced);
+        List<CalculationVariant> ranked = rank(produced, depthViolations(crossings));
         progress.report(0.98, "Ранжирование вариантов");
         long millis = (System.nanoTime() - started) / 1_000_000;
         log.info("Расчёт завершён за {} мс: вариантов {}, расчётный ДУ клиренсов {} мм{}",
@@ -619,20 +619,44 @@ public class VariantPlanner {
      * Раздел 2.8 ТЗ: небольшое смещение одной и той же трассы отдельным вариантом
      * не считается, поэтому сравниваются точки врезки и разбиение ОКС по частям сети.
      */
-    private List<CalculationVariant> rank(List<CalculationVariant> variants) {
+    private List<CalculationVariant> rank(List<CalculationVariant> variants,
+                                          Map<String, Long> depthViolations) {
         Map<String, CalculationVariant> distinct = new LinkedHashMap<>();
         for (CalculationVariant v : variants) {
             distinct.merge(v.getStructureFingerprint(), v,
                     (a, b) -> a.getSummary().getScore() <= b.getSummary().getScore() ? a : b);
         }
         List<CalculationVariant> sorted = new ArrayList<>(distinct.values());
-        sorted.sort(Comparator.comparingDouble(v -> v.getSummary().getScore()));
+        // Показатель S считается строго по разделу 8.2 ТП и ничем не дополняется.
+        // Невыдержанный вертикальный просвет — не надбавка к стоимости, а признак
+        // того, что вариант неисполним, поэтому он отсекает раньше сравнения по S.
+        sorted.sort(Comparator
+                .comparingLong((CalculationVariant v) ->
+                        depthViolations.getOrDefault(v.getVariantId(), 0L))
+                .thenComparingDouble(v -> v.getSummary().getScore()));
 
         List<CalculationVariant> out = new ArrayList<>();
         for (int i = 0; i < Math.min(3, sorted.size()); i++) {
             CalculationVariant v = sorted.get(i);
             out.add(v.withSummary(v.getSummary().withRank(i + 1)));
         }
+        return out;
+    }
+
+    /**
+     * Сколько пересечений в варианте осталось без требуемого вертикального просвета.
+     * <p>
+     * Такое бывает, когда пересечение приходится на первые метры нитки: на смену
+     * глубины с 3,0 до 2,0 м при уклоне не круче 0,10 м/м нужно десять метров разбега,
+     * а до узла ветвления или точки врезки их нет. Сервис не подменяет глубину желаемой,
+     * а показывает построенное и понижает такой вариант.
+     */
+    private Map<String, Long> depthViolations(Map<String, List<UtilityCrossing>> crossings) {
+        Map<String, Long> out = new LinkedHashMap<>();
+        crossings.forEach((variantId, list) -> out.put(variantId, list.stream()
+                .filter(c -> c.getRequiredClearance() > 0)
+                .filter(c -> c.getActualClearance() + 1e-6 < c.getRequiredClearance())
+                .count()));
         return out;
     }
 

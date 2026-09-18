@@ -82,6 +82,11 @@ test.describe('Сценарий демонстрации', () => {
     await page.getByRole('button', { name: 'Запустить расчёт' }).click()
     await waitForCalculation(page)
 
+    // Пересечения бывают не у каждого варианта: у лучшего трасса может идти
+    // на обычной глубине целиком. Переключаемся на тот, где они есть.
+    await page.getByRole('button', { name: /^Варианты/ }).click()
+    await page.getByText('по глубине', { exact: false }).first().click()
+
     await page.getByRole('button', { name: 'Участки', exact: true }).click()
     await page.getByRole('button', { name: /^Глубина/ }).click()
 
@@ -90,6 +95,14 @@ test.describe('Сценарий демонстрации', () => {
     // приложения по глубине.
     await expect(page.locator('table tbody tr').first()).toBeVisible()
     await expect(page.getByText('сверху').first()).toBeVisible()
+
+    // Щелчок по пересечению раскрывает продольный профиль магистрали и разрез.
+    // Предельный уклон 0,10 м/м — величина, которую проверяющий спросит первой.
+    await page.locator('table tbody tr').first().click()
+    await expect(page.getByText('Продольный профиль магистрали')).toBeVisible()
+    await expect(page.getByText('Разрез в месте пересечения')).toBeVisible()
+    await expect(page.getByText(/Наибольший уклон/)).toBeVisible()
+    await expect(page.getByText(/при пределе 0,10 м\/м|при пределе 0\.10 м\/м/)).toBeVisible()
   })
 
   test('ошибочный файл не роняет сервис и объясняет причину', async ({ page }) => {

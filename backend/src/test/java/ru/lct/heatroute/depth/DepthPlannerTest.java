@@ -119,21 +119,117 @@ class DepthPlannerTest {
     }
 
     @Test
-    @DisplayName("Вертикальный просвет в местах пересечений выдержан")
+    @DisplayName("У лучшего варианта вертикальные просветы выдержаны")
     void verticalClearanceRespected() throws Exception {
         prepare();
+        CalculationVariant best = deep.getVariants().get(0);
+        for (UtilityCrossing c : crossingsOf(best)) {
+            if (c.getRequiredClearance() <= 0) {
+                continue;
+            }
+            assertThat(c.getActualClearance())
+                    .as("просвет при пересечении %s (%s)", c.getUtilityId(), c.passageLabel())
+                    .isGreaterThanOrEqualTo(c.getRequiredClearance() - 1e-6);
+        }
+    }
+
+    @Test
+    @DisplayName("Вариант с невыдержанным просветом стоит ниже варианта без нарушений")
+    void variantWithViolationRanksLower() throws Exception {
+        prepare();
+        // Просвет не выдерживается там, где пересечение приходится на первые метры нитки:
+        // на смену глубины с 3,0 до 2,0 м при уклоне 0,10 м/м нужно десять метров разбега,
+        // а до точки врезки или узла ветвления их нет. Такой вариант не отбрасывается,
+        // но и наверх не попадает.
+        long previous = -1;
         for (CalculationVariant v : deep.getVariants()) {
-            List<UtilityCrossing> crossings =
-                    deep.getCrossingsByVariant().getOrDefault(v.getVariantId(), List.of());
-            for (UtilityCrossing c : crossings) {
-                if (c.getRequiredClearance() <= 0) {
-                    continue;
-                }
-                assertThat(c.getActualClearance())
-                        .as("просвет при пересечении %s (%s)", c.getUtilityId(), c.passageLabel())
-                        .isGreaterThanOrEqualTo(c.getRequiredClearance() - 1e-6);
+            long violations = crossingsOf(v).stream()
+                    .filter(c -> c.getRequiredClearance() > 0)
+                    .filter(c -> c.getActualClearance() + 1e-6 < c.getRequiredClearance())
+                    .count();
+            assertThat(violations)
+                    .as("вариант %s: нарушений просвета не меньше, чем у предыдущего",
+                            v.getVariantId())
+                    .isGreaterThanOrEqualTo(previous);
+            previous = violations;
+        }
+    }
+
+    @Test
+    @DisplayName("Пересечение ссылается на существующий участок и его глубину")
+    void crossingMatchesItsSegment() throws Exception {
+        prepare();
+        for (CalculationVariant v : deep.getVariants()) {
+            for (UtilityCrossing c : crossingsOf(v)) {
+                NewSegment segment = v.getSegments().stream()
+                        .filter(s -> s.getId().equals(c.getSegmentId()))
+                        .findFirst()
+                        .orElse(null);
+                assertThat(segment)
+                        .as("участок %s, на который ссылается пересечение %s",
+                                c.getSegmentId(), c.getUtilityId())
+                        .isNotNull();
+
+                // Выгрузка обязана описывать построенное: глубина пересечения лежит
+                // между глубинами концов своего участка, а не берётся из намерения.
+                double low = Math.min(segment.getDepthStart(), segment.getDepthEnd());
+                double high = Math.max(segment.getDepthStart(), segment.getDepthEnd());
+                assertThat(c.getNewDepth())
+                        .as("глубина пересечения против глубины участка %s", segment.getId())
+                        .isBetween(low - 1e-6, high + 1e-6);
             }
         }
+    }
+
+    @Test
+    @DisplayName("Присоединение к существующей сети не считается пересечением")
+    void tieInIsNotACrossing() throws Exception {
+        prepare();
+        for (CalculationVariant v : deep.getVariants()) {
+            for (UtilityCrossing c : crossingsOf(v)) {
+                double toNearestTieIn = v.getTieIns().stream()
+                        .mapToDouble(t -> t.getLocation().getCoordinate().distance(c.getLocation()))
+                        .min()
+                        .orElse(Double.MAX_VALUE);
+                assertThat(toNearestTieIn)
+                        .as("пересечение %s не должно совпадать с точкой врезки", c.getUtilityId())
+                        .isGreaterThan(1.0);
+            }
+        }
+    }
+
+    @Test
+    @DisplayName("После деления по глубине сеть остаётся непрерывной ниткой")
+    void splitKeepsNetworkConnected() throws Exception {
+        prepare();
+        for (CalculationVariant v : deep.getVariants()) {
+            java.util.Set<String> ends = v.getSegments().stream()
+                    .map(NewSegment::getEndNodeId)
+                    .collect(java.util.stream.Collectors.toSet());
+            long roots = v.getSegments().stream()
+                    .map(NewSegment::getStartNodeId)
+                    .filter(id -> !ends.contains(id))
+                    .distinct()
+                    .count();
+            // Начало без входящего участка бывает только в точке врезки: если деление
+            // по глубине оставит частям общий узел, нитка распадётся и таких начал
+            // станет больше.
+            assertThat(roots)
+                    .as("начал без входящего участка в варианте %s", v.getVariantId())
+                    .isEqualTo(v.getTieIns().size());
+
+            long duplicated = v.getSegments().size() - v.getSegments().stream()
+                    .map(s -> s.getStartNodeId() + ">" + s.getEndNodeId())
+                    .distinct()
+                    .count();
+            assertThat(duplicated)
+                    .as("участков с одинаковой парой узлов в варианте %s", v.getVariantId())
+                    .isZero();
+        }
+    }
+
+    private List<UtilityCrossing> crossingsOf(CalculationVariant v) {
+        return deep.getCrossingsByVariant().getOrDefault(v.getVariantId(), List.of());
     }
 
     @Test
@@ -216,6 +312,10 @@ class DepthPlannerTest {
         // где стоимость по глубине не растёт, проход снизу уводит за четыре метра
         // и добавляет не менее 10 % к стоимости участка.
         assertThat(all).allMatch(c -> c.getPassage() == UtilityCrossing.Passage.ABOVE);
-        assertThat(all).allMatch(c -> c.getNewDepth() < 3.0);
+        // Там, где манёвр поместился, труба действительно поднялась выше трёх метров.
+        assertThat(all).anyMatch(c -> c.getNewDepth() < 3.0);
+        assertThat(all)
+                .filteredOn(c -> c.getActualClearance() + 1e-6 >= c.getRequiredClearance())
+                .allMatch(c -> c.getNewDepth() < 3.0);
     }
 }
