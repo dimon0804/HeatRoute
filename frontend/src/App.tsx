@@ -86,7 +86,10 @@ export default function App() {
       const uploaded = await api.uploadDataset(file)
       setDatasets((prev) => [uploaded, ...prev.filter((d) => d.id !== uploaded.id)])
       await selectDataset(uploaded)
-      setTab('diagnostics')
+      // Разобранный набор открывается на протоколе разбора: там самое важное,
+      // что о нём известно. У неразобранного протокол пуст, а причина написана
+      // в панели набора — уводить с неё на пустую вкладку незачем.
+      setTab(uploaded.status === 'FAILED' ? 'data' : 'diagnostics')
     } catch (e) {
       setError(e instanceof ApiError ? e.message : (e as Error).message)
     } finally {

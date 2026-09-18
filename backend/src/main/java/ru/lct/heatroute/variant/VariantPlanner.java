@@ -800,11 +800,18 @@ public class VariantPlanner {
                 }
 
                 // Следующий проход строже: к прежним зонам добавляются те, что остались
-                // после перекладки. Если новых нет, повторять построение незачем —
-                // запреты те же, и трасса получится та же.
-                int before = zones.size();
-                zones.addAll(forbiddenZones(relaidCrossings));
-                if (zones.size() == before) {
+                // после перекладки. Нарушение ровно там, где уже стоит запрет, новой
+                // зоны не даёт — повторять построение с теми же запретами незачем,
+                // трасса получится та же.
+                int added = 0;
+                for (Geometry zone : forbiddenZones(relaidCrossings)) {
+                    boolean known = zones.stream().anyMatch(existing -> existing.covers(zone));
+                    if (!known) {
+                        zones.add(zone);
+                        added++;
+                    }
+                }
+                if (added == 0) {
                     break;
                 }
             }

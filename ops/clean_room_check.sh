@@ -14,7 +14,15 @@ SRC="$(cd "$(dirname "$0")/.." && pwd)"
 WORK="${TMPDIR:-/tmp}/heatroute-clean-$(date +%H%M%S)"
 FAILED=0
 
-step() { printf '%-58s' "$1"; }
+# Кириллица в UTF-8 занимает два байта на букву, поэтому printf '%-58s' считает
+# не то, что видно. Ширина добирается по числу символов.
+step() {
+    local text="$1"
+    printf '%s' "$text"
+    local pad=$((52 - ${#text}))
+    [ $pad -gt 0 ] && printf '%*s' "$pad" ''
+    printf ' '
+}
 ok()   { echo "PASS"; }
 bad()  { echo "FAIL  $1"; FAILED=1; }
 
