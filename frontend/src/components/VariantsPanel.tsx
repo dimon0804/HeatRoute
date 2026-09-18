@@ -82,6 +82,30 @@ export function VariantsPanel({ job, activeVariant, onSelectVariant, onExport }:
         </div>
       </Section>
 
+      {job.variants.some((v) => v.summary.unconnectedOksIds.length > 0) && (
+        <Section
+          title="ОКС без автоматического маршрута"
+          hint="Раздел 2.9 ТЗ: построенная часть результата сохраняется, за каждый
+                неподключённый объект начисляется штраф"
+        >
+          {job.variants
+            .filter((v) => v.summary.unconnectedOksIds.length > 0)
+            .map((v) => (
+              <div key={v.variantCode} className="mb-2">
+                <p className="mb-1 text-[11px] uppercase tracking-wide text-muted">
+                  Вариант № {v.summary.rank}
+                </p>
+                <div className="flex flex-wrap gap-1">
+                  {v.summary.unconnectedOksIds.map((id) => (
+                    <Badge key={id} tone="bad">{id}</Badge>
+                  ))}
+                </div>
+                <Row label="Штраф" value={money(v.summary.unconnectedPenalty)} mono />
+              </div>
+            ))}
+        </Section>
+      )}
+
       {job.stats && (
         <Section title="Как получен результат" hint="Показатели прогона — для вопросов о методе">
           <Row label="Время расчёта" value={duration(job.durationMillis ?? job.stats.millis)} mono />

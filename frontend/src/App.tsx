@@ -39,6 +39,7 @@ export default function App() {
   const [withDepth, setWithDepth] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [fitKey, setFitKey] = useState<string | null>(null)
+  const [selectedFeatureId, setSelectedFeatureId] = useState<string | null>(null)
 
   // --- список наборов при старте ---------------------------------------------------------
   useEffect(() => {
@@ -107,6 +108,7 @@ export default function App() {
     setError(null)
     setResult(null)
     setActiveVariant(null)
+    setSelectedFeatureId(null)
     setTab('variants')
     try {
       const created = await api.submitJob(dataset.id, withDepth)
@@ -255,7 +257,12 @@ export default function App() {
               />
             )}
             {tab === 'segments' && (
-              <SegmentsPanel result={result} activeVariant={activeVariant} />
+              <SegmentsPanel
+                result={result}
+                activeVariant={activeVariant}
+                selectedFeatureId={selectedFeatureId}
+                onSelectFeature={setSelectedFeatureId}
+              />
             )}
           </div>
 
@@ -274,6 +281,7 @@ export default function App() {
             activeVariant={activeVariant}
             showBasemap={basemap}
             fitKey={fitKey}
+            selectedFeatureId={selectedFeatureId}
           />
           <Legend />
         </main>

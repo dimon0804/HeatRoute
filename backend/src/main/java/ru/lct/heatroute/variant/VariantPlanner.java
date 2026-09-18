@@ -64,6 +64,7 @@ public class VariantPlanner {
     private final CostCalculator costCalculator;
     private final VariantRenumberer renumberer;
     private final CrossingRepair crossingRepair;
+    private final TreeImprover treeImprover;
     private final DepthPlanner depthPlanner;
 
     public VariantPlanner(ReferenceCatalog catalog,
@@ -76,6 +77,7 @@ public class VariantPlanner {
                           CostCalculator costCalculator,
                           VariantRenumberer renumberer,
                           CrossingRepair crossingRepair,
+                          TreeImprover treeImprover,
                           DepthPlanner depthPlanner) {
         this.catalog = catalog;
         this.geoProps = geoProps;
@@ -87,6 +89,7 @@ public class VariantPlanner {
         this.costCalculator = costCalculator;
         this.renumberer = renumberer;
         this.crossingRepair = crossingRepair;
+        this.treeImprover = treeImprover;
         this.depthPlanner = depthPlanner;
     }
 
@@ -502,6 +505,12 @@ public class VariantPlanner {
         java.util.function.BiPredicate<Integer, Integer> passable = (a, b) -> field.isPassable(
                 tree.locationOf(graph, a), tree.locationOf(graph, b), designDn,
                 tree.isSynthetic(b) ? null : graph.node(b).getTerminalOksId());
+
+        // Эвристика подключает объекты по одному и назад не оглядывается. Локальное
+        // улучшение перецепляет ветви туда, где стало удобнее, и делается до правки
+        // пересечений: перестроенные ветви могут пересечься заново.
+        treeImprover.improve(tree, graph,
+                (from, to, exemptOks) -> field.isPassable(from, to, designDnForClearance, exemptOks));
 
         // Раздел 2.3 ТЗ: пересекающиеся маршруты объединяются в общую сеть.
         // Выполняется до спрямления: объединение убирает лишние звенья, и спрямлять

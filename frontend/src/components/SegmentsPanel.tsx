@@ -5,6 +5,8 @@ import { Badge, Empty, Section } from './ui'
 interface Props {
   result: GeoJSON.FeatureCollection | null
   activeVariant: string | null
+  selectedFeatureId: string | null
+  onSelectFeature: (id: string | null) => void
 }
 
 type Tab = 'segments' | 'reconstruction' | 'depth'
@@ -16,7 +18,9 @@ type Tab = 'segments' | 'reconstruction' | 'depth'
  * условные диаметры и участки, которым нужно увеличение диаметра. Карта отвечает
  * на вопрос «где», таблица — на вопрос «сколько».
  */
-export function SegmentsPanel({ result, activeVariant }: Props) {
+export function SegmentsPanel({
+  result, activeVariant, selectedFeatureId, onSelectFeature,
+}: Props) {
   const [tab, setTab] = useState<Tab>('segments')
 
   const rows = useMemo(() => {
@@ -58,7 +62,7 @@ export function SegmentsPanel({ result, activeVariant }: Props) {
       }
       hint={
         tab === 'segments'
-          ? 'Расход, условный диаметр, способ прокладки и стоимость'
+          ? 'Расход, условный диаметр, способ прокладки и стоимость. Щелчок по строке показывает участок на карте'
           : tab === 'reconstruction'
             ? 'Участки, которым после подключения не хватает пропускной способности'
             : 'Где трасса проходит выше или ниже существующих коммуникаций'
@@ -97,7 +101,16 @@ export function SegmentsPanel({ result, activeVariant }: Props) {
               </thead>
               <tbody className="font-mono">
                 {rows.segments.map((row) => (
-                  <tr key={String(row.id)} className="border-t border-edge/60">
+                  <tr
+                    key={String(row.id)}
+                    onClick={() => onSelectFeature(
+                      selectedFeatureId === String(row.id) ? null : String(row.id))}
+                    className={
+                      'cursor-pointer border-t border-edge/60 transition-colors ' +
+                      (selectedFeatureId === String(row.id)
+                        ? 'bg-accent/15' : 'hover:bg-edge/40')
+                    }
+                  >
                     <td className="py-1 pr-2">
                       <span className="text-slate-300">{String(row.id)}</span>
                       {row.laying_method === 'special' && (
@@ -128,7 +141,16 @@ export function SegmentsPanel({ result, activeVariant }: Props) {
             </thead>
             <tbody className="font-mono">
               {rows.depth.map((row) => (
-                <tr key={String(row.id)} className="border-t border-edge/60">
+                <tr
+                  key={String(row.id)}
+                  onClick={() => onSelectFeature(
+                    selectedFeatureId === String(row.id) ? null : String(row.id))}
+                  className={
+                    'cursor-pointer border-t border-edge/60 transition-colors ' +
+                    (selectedFeatureId === String(row.id)
+                      ? 'bg-accent/15' : 'hover:bg-edge/40')
+                  }
+                >
                   <td className="py-1 pr-2 text-slate-300">{String(row.segment_id)}</td>
                   <td className="py-1 pr-2 text-slate-400">
                     {RESTRICTION_LABELS[String(row.utility_type)] ?? String(row.utility_type)}
@@ -164,7 +186,16 @@ export function SegmentsPanel({ result, activeVariant }: Props) {
             </thead>
             <tbody className="font-mono">
               {rows.reconstruction.map((row) => (
-                <tr key={String(row.id)} className="border-t border-edge/60">
+                <tr
+                  key={String(row.id)}
+                  onClick={() => onSelectFeature(
+                    selectedFeatureId === String(row.id) ? null : String(row.id))}
+                  className={
+                    'cursor-pointer border-t border-edge/60 transition-colors ' +
+                    (selectedFeatureId === String(row.id)
+                      ? 'bg-accent/15' : 'hover:bg-edge/40')
+                  }
+                >
                   <td className="py-1 pr-2 text-slate-300">{String(row.existing_object_id)}</td>
                   <td className="py-1 text-right text-slate-200">
                     {flow(Number(row.existing_flow_tph))}

@@ -22,6 +22,7 @@ export const COLORS = {
   chamberReconstruction: '#ffd23f',
   technicalNode: '#c9d6e4',
   depthCrossing: '#a78bfa',
+  highlight: '#ffffff',
 } as const
 
 /**

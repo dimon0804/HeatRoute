@@ -11,6 +11,8 @@ interface Props {
   activeVariant: string | null
   showBasemap: boolean
   fitKey: string | null
+  /** Идентификатор объекта, выбранного в таблице; карта подсвечивает и показывает его. */
+  selectedFeatureId: string | null
 }
 
 const EMPTY: GeoJSON.FeatureCollection = { type: 'FeatureCollection', features: [] }
@@ -26,7 +28,9 @@ const EMPTY: GeoJSON.FeatureCollection = { type: 'FeatureCollection', features: 
  * рисовать текст, а зависеть от интернета в зале защиты не стоит. Все сведения
  * об объекте показываются по щелчку.
  */
-export function MapView({ scene, result, activeVariant, showBasemap, fitKey }: Props) {
+export function MapView({
+  scene, result, activeVariant, showBasemap, fitKey, selectedFeatureId,
+}: Props) {
   const container = useRef<HTMLDivElement>(null)
   const map = useRef<MapLibreMap | null>(null)
   const ready = useRef(false)
@@ -60,6 +64,7 @@ export function MapView({ scene, result, activeVariant, showBasemap, fitKey }: P
       instance.addSource(SOURCE_IDS.result, { type: 'geojson', data: resultRef.current ?? EMPTY })
       addSceneLayers(instance)
       addResultLayers(instance)
+      addHighlightLayer(instance)
       attachPopups(instance)
       applyVariantFilter(instance, variantRef.current)
       ready.current = true
@@ -100,6 +105,29 @@ export function MapView({ scene, result, activeVariant, showBasemap, fitKey }: P
     if (!instance || !ready.current) return
     applyVariantFilter(instance, activeVariant)
   }, [activeVariant, result])
+
+  // --- подсветка выбранного объекта -------------------------------------------------------
+  useEffect(() => {
+    const instance = map.current
+    if (!instance || !ready.current) return
+
+    const filter: maplibregl.FilterSpecification = selectedFeatureId
+      ? ['==', ['get', 'id'], selectedFeatureId]
+      : ['==', ['get', 'id'], '\u0000']   // заведомо пустой фильтр
+    if (instance.getLayer('highlight-line')) instance.setFilter('highlight-line', filter)
+    if (instance.getLayer('highlight-point')) instance.setFilter('highlight-point', filter)
+
+    if (!selectedFeatureId || !result) return
+    const feature = result.features.find((f) => f.properties?.id === selectedFeatureId)
+    if (!feature?.geometry || !('coordinates' in feature.geometry)) return
+
+    // Показываем объект целиком, не меняя масштаб резко: на демонстрации важно,
+    // чтобы зритель не потерял контекст.
+    const bounds = boundsOfGeometry(feature.geometry)
+    if (bounds) {
+      instance.fitBounds(bounds, { padding: 220, duration: 700, maxZoom: 17.5 })
+    }
+  }, [selectedFeatureId, result])
 
   // --- подложка ------------------------------------------------------------------------------
   useEffect(() => {
@@ -353,6 +381,39 @@ function addResultLayers(map: MapLibreMap) {
   })
 }
 
+/**
+ * Слой подсветки поверх остальных: выбранный в таблице объект обводится белым.
+ * Отдельный слой, а не изменение краски существующего, — иначе пришлось бы
+ * пересобирать выражения цвета при каждом выборе строки.
+ */
+function addHighlightLayer(map: MapLibreMap) {
+  map.addLayer({
+    id: 'highlight-line',
+    type: 'line',
+    source: SOURCE_IDS.result,
+    filter: ['==', ['get', 'id'], '\u0000'],
+    layout: { 'line-cap': 'round', 'line-join': 'round' },
+    paint: {
+      'line-color': COLORS.highlight,
+      'line-width': 3,
+      'line-opacity': 0.9,
+      'line-dasharray': [2, 1.5],
+    },
+  })
+  map.addLayer({
+    id: 'highlight-point',
+    type: 'circle',
+    source: SOURCE_IDS.result,
+    filter: ['==', ['get', 'id'], '\u0000'],
+    paint: {
+      'circle-radius': 12,
+      'circle-color': 'rgba(0,0,0,0)',
+      'circle-stroke-color': COLORS.highlight,
+      'circle-stroke-width': 2,
+    },
+  })
+}
+
 /** Всплывающая карточка по щелчку: все атрибуты объекта так, как они уйдут в выгрузку. */
 function attachPopups(map: MapLibreMap) {
   const clickable = [
@@ -439,6 +500,14 @@ function describe(props: Record<string, unknown>): string {
   if (props.cost != null) add('Стоимость', money(Number(props.cost)))
 
   return `<div class="hr-popup-body"><div class="hr-title">${title}</div>${rows.join('')}</div>`
+}
+
+/** Границы одной геометрии. */
+function boundsOfGeometry(geometry: GeoJSON.Geometry): maplibregl.LngLatBoundsLike | null {
+  return boundsOf({
+    type: 'FeatureCollection',
+    features: [{ type: 'Feature', geometry, properties: {} }],
+  })
 }
 
 /** Границы коллекции для подгонки вида. */
