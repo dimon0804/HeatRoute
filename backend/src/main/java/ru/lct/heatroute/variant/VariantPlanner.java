@@ -642,12 +642,6 @@ public class VariantPlanner {
         // запускается несколько раз с разными затравками, а лучшее дерево по длине
         // отбирается здесь. Разброс между запусками на конкурсном наборе достигает
         // десятых долей, и брать первый попавшийся результат незачем.
-        // Клиренс для отводов от новых камер берётся по тому же диаметру, что и граф:
-        // маршрут, допустимый для магистрали, допустим и для любой ветви.
-        int designDnForClearance = catalog.selectForFlow(
-                        group.stream().mapToDouble(SteinerTreeBuilder.Terminal::getFlowTph).sum())
-                .map(DiameterRow::getDn).orElse(catalog.largest().getDn());
-
         SteinerTreeBuilder.Result built = null;
         double bestLength = Double.POSITIVE_INFINITY;
         int restarts = Math.max(1, routingProps.getSteinerRestarts());
@@ -683,6 +677,12 @@ public class VariantPlanner {
                 .map(DiameterRow::getDn).orElse(catalog.largest().getDn());
 
         RouteTree tree = built.getTree();
+
+        // Спрямление и правка пересечений проверяются по диаметру всей части сети,
+        // а не по диаметру конкретной ветви. Это заведомо строже необходимого: ветвь
+        // тоньше магистрали, и часть спрямлений отвергается зря. Выбор сознательный —
+        // обе операции меняют дерево по ходу, и диаметр поддерева пришлось бы
+        // пересчитывать на каждый шаг; ошибка же здесь стоила бы нарушения нормы.
         java.util.function.BiPredicate<Integer, Integer> passable = (a, b) -> {
             Coordinate from = tree.locationOf(graph, a);
             Coordinate to = tree.locationOf(graph, b);
