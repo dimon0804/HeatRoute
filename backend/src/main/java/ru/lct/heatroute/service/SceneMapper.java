@@ -94,6 +94,7 @@ public class SceneMapper {
                 .length(s.getLength())
                 .score(s.getScore())
                 .unconnectedOksIds(s.getUnconnectedOksIds())
+                .unconnectedReasons(s.getUnconnectedReasons())
                 .build();
     }
 
