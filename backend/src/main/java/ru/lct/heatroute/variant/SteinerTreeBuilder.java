@@ -44,10 +44,15 @@ public class SteinerTreeBuilder {
      * Проверка проходимости прямого отрезка между двумя точками.
      * Нужна при врезке новой камеры в уже построенный участок: такого ребра
      * в графе видимости нет, и его клиренс приходится проверять отдельно.
+     * <p>
+     * Диаметр передаётся явно, потому что клиренс зависит от него, а разные части
+     * сети имеют разный диаметр: отвод к одному объекту несёт только его расход,
+     * и требовать от этого отвода габарит магистрали значит закрывать проходы,
+     * в которые труба на самом деле проходит.
      */
     @FunctionalInterface
     public interface Passability {
-        boolean check(Coordinate from, Coordinate to, String exemptOksId);
+        boolean check(Coordinate from, Coordinate to, String exemptOksId, int requiredDn);
     }
 
     /** Терминал: узел графа, ОКС и его расчётный расход. */
@@ -83,7 +88,7 @@ public class SteinerTreeBuilder {
     public Result build(RoutingGraph graph, int rootNode, List<Terminal> terminals,
                         int rootSpareDegree, Terminal seedTerminal) {
         return build(graph, rootNode, terminals, rootSpareDegree, seedTerminal,
-                (a, b, oks) -> true, null);
+                (a, b, oks, dn) -> true, null);
     }
 
     /**
@@ -260,7 +265,10 @@ public class SteinerTreeBuilder {
             if (projection.distance(a) < 1.0 || projection.distance(b) < 1.0) {
                 continue;
             }
-            if (!passable.check(projection, target, terminal.getOksId())) {
+            // Клиренс отвода — по его собственному диаметру, а не по диаметру группы:
+            // от новой камеры к точке подключения идёт труба под расход одного объекта.
+            if (!passable.check(projection, target, terminal.getOksId(),
+                    branchDiameter(terminal))) {
                 continue;
             }
 
@@ -279,6 +287,13 @@ public class SteinerTreeBuilder {
             return true;
         }
         return false;
+    }
+
+    /** Условный диаметр отвода к одному терминалу — по его собственному расходу. */
+    private int branchDiameter(Terminal terminal) {
+        return catalog.selectForFlow(Math.max(terminal.getFlowTph(), 0.1))
+                .map(row -> row.getDn())
+                .orElse(catalog.largest().getDn());
     }
 
     private double nearestEdgeDistance(RoutingGraph graph, RouteTree tree, Coordinate target) {

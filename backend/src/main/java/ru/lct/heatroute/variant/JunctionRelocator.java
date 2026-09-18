@@ -164,7 +164,7 @@ public class JunctionRelocator {
                     break;   // дальше доли только меньше, выигрыш только меньше
                 }
                 boolean reachable = neighbours.stream()
-                        .allMatch(n -> passable.check(target, n.location, n.exemptOks));
+                        .allMatch(n -> passable.check(target, n.location, n.exemptOks, n.diameter));
                 if (!reachable) {
                     blocked++;
                     continue;
@@ -193,20 +193,25 @@ public class JunctionRelocator {
         Integer parent = tree.parentOf(node);
         if (parent != null) {
             // Ребро к родителю несёт расход всего поддерева этого узла.
-            out.add(new Neighbour(tree.locationOf(graph, parent),
-                    costPerMeter(flows, node), null));
+            out.add(neighbour(tree.locationOf(graph, parent), flows, node, null));
         }
         for (Integer child : tree.childrenOf(node)) {
-            out.add(new Neighbour(tree.locationOf(graph, child), costPerMeter(flows, child),
+            out.add(neighbour(tree.locationOf(graph, child), flows, child,
                     tree.getTerminalOks().get(child)));
         }
         return out;
     }
 
-    private double costPerMeter(Map<Integer, Double> flows, int node) {
+    private Neighbour neighbour(Coordinate location, Map<Integer, Double> flows,
+                                int node, String exemptOks) {
+        int dn = diameterOf(flows, node);
+        return new Neighbour(location, catalog.newCostPerM(dn), exemptOks, dn);
+    }
+
+    private int diameterOf(Map<Integer, Double> flows, int node) {
         double flow = Math.max(flows.getOrDefault(node, FALLBACK_FLOW_TPH), FALLBACK_FLOW_TPH);
-        int dn = catalog.selectForFlow(flow).map(row -> row.getDn()).orElse(catalog.largest().getDn());
-        return catalog.newCostPerM(dn);
+        return catalog.selectForFlow(flow).map(row -> row.getDn())
+                .orElse(catalog.largest().getDn());
     }
 
     private static double cost(List<Neighbour> neighbours, Coordinate point) {
@@ -281,16 +286,22 @@ public class JunctionRelocator {
                 from.y + (to.y - from.y) * fraction);
     }
 
-    /** Сосед развилки: куда идёт участок, сколько стоит его метр и чей контур не мешает. */
+    /**
+     * Сосед развилки: куда идёт участок, сколько стоит его метр, чей контур не мешает
+     * и какого он диаметра — клиренс проверяется по трубе самой ветви.
+     */
     private static final class Neighbour {
         private final Coordinate location;
         private final double costPerMeter;
         private final String exemptOks;
+        private final int diameter;
 
-        private Neighbour(Coordinate location, double costPerMeter, String exemptOks) {
+        private Neighbour(Coordinate location, double costPerMeter, String exemptOks,
+                          int diameter) {
             this.location = location;
             this.costPerMeter = costPerMeter;
             this.exemptOks = exemptOks;
+            this.diameter = diameter;
         }
     }
 }

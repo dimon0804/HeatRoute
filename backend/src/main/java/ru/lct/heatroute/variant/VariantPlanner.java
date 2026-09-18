@@ -636,9 +636,7 @@ public class VariantPlanner {
                     ? null : group.get((attempt - 1) % group.size());
             SteinerTreeBuilder.Result trial = treeBuilder.build(graph,
                     candidate.getGraphNodeIndex(), group, rootSpareDegree, seed,
-                    (from, to, exemptOks) -> field.isPassable(from, to, designDnForClearance,
-                            exemptOks) && !barrier.blocks(from, to),
-                    allowedEdges);
+                    clearanceOf(field, barrier), allowedEdges);
             if (trial.isEmpty()) {
                 continue;
             }
@@ -672,9 +670,8 @@ public class VariantPlanner {
         // развилка меняет, куда выгодно цеплять ветвь, — поэтому они чередуются
         // до исчерпания выигрыша. Оба делаются до правки пересечений: перестроенные
         // ветви могут пересечься заново.
-        SteinerTreeBuilder.Passability clearance = (from, to, exemptOks) ->
-                field.isPassable(from, to, designDnForClearance, exemptOks)
-                        && !barrier.blocks(from, to);
+        SteinerTreeBuilder.Passability clearance = (from, to, exemptOks, requiredDn) ->
+                field.isPassable(from, to, requiredDn, exemptOks) && !barrier.blocks(from, to);
         for (int round = 0; round < routingProps.getTreePolishRounds(); round++) {
             double gain = treeImprover.improve(tree, graph, clearance)
                     + junctionRelocator.relocate(tree, graph, clearance);
@@ -1019,6 +1016,19 @@ public class VariantPlanner {
                     bases.size(), added);
         }
         return variantCounter;
+    }
+
+    /**
+     * Проверка клиренса для отрезка, которого нет в графе видимости.
+     * <p>
+     * Диаметр приходит от вызывающего: отвод к одному объекту проверяется по своей
+     * трубе, перенос развилки — по трубе примыкающей ветви. Требовать везде габарит
+     * магистрали значит закрывать проходы, в которые труба проходит.
+     */
+    private static SteinerTreeBuilder.Passability clearanceOf(ObstacleField field,
+                                                              RouteBarrier barrier) {
+        return (from, to, exemptOks, requiredDn) ->
+                field.isPassable(from, to, requiredDn, exemptOks) && !barrier.blocks(from, to);
     }
 
     /** Первое положительное из перечисленного — так задаётся порядок источников. */

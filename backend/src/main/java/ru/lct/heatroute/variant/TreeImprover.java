@@ -136,7 +136,7 @@ public class TreeImprover {
                 }
                 double length = tree.locationOf(graph, node).distance(childLocation);
                 if (length < bestNodeLength && passable.check(
-                        tree.locationOf(graph, node), childLocation, exemptOks)) {
+                        tree.locationOf(graph, node), childLocation, exemptOks, diameter)) {
                     bestNodeLength = length;
                     bestNode = node;
                 }
@@ -163,7 +163,8 @@ public class TreeImprover {
                     continue;
                 }
                 double length = point.distance(childLocation);
-                if (length < bestEdgeLength && passable.check(point, childLocation, exemptOks)) {
+                if (length < bestEdgeLength
+                        && passable.check(point, childLocation, exemptOks, diameter)) {
                     bestEdgeLength = length;
                     bestEdge = other;
                     bestPoint = point;
