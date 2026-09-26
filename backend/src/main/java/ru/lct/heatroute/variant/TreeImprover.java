@@ -59,15 +59,17 @@ public class TreeImprover {
 
     /**
      * @param passable проверка клиренса для нового отвода
-     * @return суммарный выигрыш в метрах
+     * @return выигрыш в метрах и число ходов, проверенных последним проходом
      */
-    public double improve(RouteTree tree, RoutingGraph graph,
+    public Effort improve(RouteTree tree, RoutingGraph graph,
                           SteinerTreeBuilder.Passability passable) {
         double totalGain = 0;
         int maxDegree = catalog.props().getMaxChamberDegree();
+        int[] verified = {0};
 
         for (int pass = 0; pass < MAX_PASSES; pass++) {
-            double gain = improveOnce(tree, graph, passable, maxDegree);
+            verified[0] = 0;
+            double gain = improveOnce(tree, graph, passable, maxDegree, verified);
             if (gain <= 0) {
                 break;
             }
@@ -77,7 +79,9 @@ public class TreeImprover {
             log.debug("Локальное улучшение дерева: решение дешевле на {} руб.",
                     Math.round(totalGain));
         }
-        return totalGain;
+        log.debug("Перецепка ветвей: последний проход проверил {} ходов без улучшения",
+                verified[0]);
+        return new Effort(totalGain, verified[0]);
     }
 
     /**
@@ -98,7 +102,8 @@ public class TreeImprover {
     }
 
     private double improveOnce(RouteTree tree, RoutingGraph graph,
-                               SteinerTreeBuilder.Passability passable, int maxDegree) {
+                               SteinerTreeBuilder.Passability passable, int maxDegree,
+                               int[] verified) {
         // Расходы поддеревьев считаются один раз на проход: они меняются только
         // после принятого хода, а ход завершает проход.
         Map<Integer, Double> flows = tree.subtreeFlows();
@@ -134,6 +139,7 @@ public class TreeImprover {
                 if (tree.degree(node) + 1 > maxDegree) {
                     continue;
                 }
+                verified[0]++;
                 double length = tree.locationOf(graph, node).distance(childLocation);
                 if (length < bestNodeLength && passable.check(
                         tree.locationOf(graph, node), childLocation, exemptOks, diameter)) {
@@ -162,6 +168,7 @@ public class TreeImprover {
                 if (point.distance(a) < MIN_OFFSET_M || point.distance(b) < MIN_OFFSET_M) {
                     continue;
                 }
+                verified[0]++;
                 double length = point.distance(childLocation);
                 if (length < bestEdgeLength
                         && passable.check(point, childLocation, exemptOks, diameter)) {

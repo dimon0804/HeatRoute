@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { api, ApiError } from './api/client'
-import type { Dataset, ForbiddenZone, Job } from './api/types'
+import type { ComplianceReport, Dataset, ForbiddenZone, Job } from './api/types'
+import { CompliancePanel } from './components/CompliancePanel'
 import { DatasetPanel } from './components/DatasetPanel'
 import { DiagnosticsPanel } from './components/DiagnosticsPanel'
 import { Legend } from './components/Legend'
@@ -11,13 +12,14 @@ import { ZonesPanel } from './components/ZonesPanel'
 import { Badge, Button, Progress } from './components/ui'
 import { duration, JOB_STATUS_LABELS } from './lib/format'
 
-type Tab = 'data' | 'diagnostics' | 'variants' | 'segments'
+type Tab = 'data' | 'diagnostics' | 'variants' | 'segments' | 'compliance'
 
 const TABS: { key: Tab; label: string }[] = [
   { key: 'data', label: 'Данные' },
   { key: 'diagnostics', label: 'Разбор' },
   { key: 'variants', label: 'Варианты' },
   { key: 'segments', label: 'Участки' },
+  { key: 'compliance', label: 'Проверка' },
 ]
 
 /**
@@ -44,6 +46,14 @@ export default function App() {
   const [zones, setZones] = useState<ForbiddenZone[]>([])
   const [zoneRadius, setZoneRadius] = useState(40)
   const [placingZone, setPlacingZone] = useState(false)
+  // Проверка выгрузки на соответствие приложению: отчёт по своему расчёту и отчёт
+  // по загруженным файлам живут отдельно — это разные вопросы к одному правилу.
+  const [compliance, setCompliance] = useState<ComplianceReport | null>(null)
+  const [complianceLoading, setComplianceLoading] = useState(false)
+  const [complianceError, setComplianceError] = useState<string | null>(null)
+  const [uploadedCompliance, setUploadedCompliance] = useState<ComplianceReport | null>(null)
+  const [checkingFiles, setCheckingFiles] = useState(false)
+  const [uploadComplianceError, setUploadComplianceError] = useState<string | null>(null)
 
   // --- список наборов при старте ---------------------------------------------------------
   useEffect(() => {
@@ -157,6 +167,48 @@ export default function App() {
     return () => window.clearInterval(timer)
   }, [job])
 
+  // --- проверка выгрузки на соответствие приложению ---------------------------------------
+  // Отчёт запрашивается по завершении расчёта: проверяется тот же файл, который
+  // уходит заказчику, вместе с входным набором, по которому он получен.
+  const jobId = job?.id
+  const jobStatus = job?.status
+  useEffect(() => {
+    if (!jobId || jobStatus !== 'COMPLETED') {
+      setCompliance(null)
+      setComplianceError(null)
+      return
+    }
+    let cancelled = false
+    setComplianceLoading(true)
+    setComplianceError(null)
+    api.jobCompliance(jobId)
+      .then((fresh) => {
+        if (!cancelled) setCompliance(fresh)
+      })
+      .catch((e: Error) => {
+        if (!cancelled) setComplianceError(e.message)
+      })
+      .finally(() => {
+        if (!cancelled) setComplianceLoading(false)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [jobId, jobStatus])
+
+  const handleCheckFiles = useCallback(async (resultFile: File, datasetFile: File) => {
+    setCheckingFiles(true)
+    setUploadComplianceError(null)
+    setUploadedCompliance(null)
+    try {
+      setUploadedCompliance(await api.checkCompliance(resultFile, datasetFile))
+    } catch (e) {
+      setUploadComplianceError(e instanceof ApiError ? e.message : (e as Error).message)
+    } finally {
+      setCheckingFiles(false)
+    }
+  }, [])
+
   // Пока идёт приём файла, расчёт запускать нельзя. Разбор выполняется на сервере
   // синхронно и занимает секунды; за это время в панели виден набор, открытый при
   // старте, и запуск ушёл бы по нему. Дальше загрузка открыла бы уже свой набор
@@ -239,7 +291,9 @@ export default function App() {
                 type="button"
                 onClick={() => setTab(item.key)}
                 className={
-                  'flex-1 border-b-2 px-2 py-2 text-[12.5px] transition-colors ' +
+                  // Вкладок пять, и у трёх есть счётчик: на 380 точках боковой
+                  // панели полям по бокам места не остаётся.
+                  'flex-1 border-b-2 px-1 py-2 text-[12.5px] transition-colors ' +
                   (tab === item.key
                     ? 'border-accent text-slate-100'
                     : 'border-transparent text-muted hover:text-slate-300')
@@ -256,6 +310,11 @@ export default function App() {
                     <Badge tone="good">{job.variants.length}</Badge>
                   </span>
                 ) : null}
+                {item.key === 'compliance' && compliance && compliance.violations > 0 && (
+                  <span className="ml-1.5 align-middle">
+                    <Badge tone="bad">{compliance.violations}</Badge>
+                  </span>
+                )}
               </button>
             ))}
           </nav>
@@ -290,6 +349,22 @@ export default function App() {
                 activeVariant={activeVariant}
                 selectedFeatureId={selectedFeatureId}
                 onSelectFeature={setSelectedFeatureId}
+              />
+            )}
+            {tab === 'compliance' && (
+              <CompliancePanel
+                job={job}
+                report={compliance}
+                loading={complianceLoading}
+                error={complianceError}
+                uploaded={uploadedCompliance}
+                checking={checkingFiles}
+                uploadError={uploadComplianceError}
+                onCheckFiles={(resultFile, datasetFile) =>
+                  void handleCheckFiles(resultFile, datasetFile)}
+                onSelectFeature={setSelectedFeatureId}
+                selectedFeatureId={selectedFeatureId}
+                onSelectVariant={setActiveVariant}
               />
             )}
           </div>

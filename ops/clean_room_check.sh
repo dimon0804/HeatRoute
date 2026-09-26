@@ -21,10 +21,27 @@ step() { CURRENT="$1"; }
 ok()   { echo "PASS  $CURRENT"; }
 bad()  { echo "FAIL  $CURRENT — $1"; FAILED=1; }
 
+# Локальный стек занимает те же имена контейнеров и те же порты, что и проверяемый
+# клон: имена в docker-compose.yml заданы явно, чтобы на демонстрации можно было
+# сказать `docker logs heatroute-backend`. Поэтому перед проверкой рабочий стек
+# останавливается, а после — поднимается обратно. Без этого проверка падает на шаге
+# запуска, и падает не по делу.
+LOCAL_WAS_UP=0
+if [ -n "$(docker ps --filter name=heatroute- --format '{{.ID}}' 2>/dev/null)" ]; then
+    LOCAL_WAS_UP=1
+    echo "--- Локальный стек поднят, останавливаю его на время проверки ---"
+    (cd "$SRC" && docker compose stop >/dev/null 2>&1)
+fi
+
 cleanup() {
     if [ -d "$WORK" ]; then
         (cd "$WORK" && docker compose down -v >/dev/null 2>&1)
         rm -rf "$WORK"
+    fi
+    if [ "$LOCAL_WAS_UP" = "1" ]; then
+        echo
+        echo "--- Возвращаю локальный стек ---"
+        (cd "$SRC" && docker compose start >/dev/null 2>&1)
     fi
 }
 trap cleanup EXIT
@@ -111,6 +128,35 @@ assert d['type'] == 'FeatureCollection', 'не FeatureCollection'
 assert len(d['features']) > 0, 'пустая выгрузка'
 assert 'variant_summary' in kinds, 'нет сводной записи варианта'
 " 2>/dev/null && ok || bad "выгрузка не прошла проверку"
+
+step "Проверка соответствия приложению проходит без нарушений"
+COMPLIANCE=$(curl -s --max-time 120 "http://localhost:8080/api/v1/jobs/$JOB/compliance")
+echo "$COMPLIANCE" > compliance.json
+python -c "
+import json
+d = json.load(open('compliance.json', encoding='utf-8'))
+assert d['checks'] > 500, 'сверок всего %d: «нарушений нет» при этом ничего не значит' % d['checks']
+assert d['compliant'], 'нарушений %d, первое: %s' % (
+    d['violations'], (d['findings'] or [{}])[0].get('detail'))
+" 2>/dev/null && ok || bad "выгрузка не прошла проверку по правилам приложения"
+
+step "Проверка соответствия работает и по загруженным файлам"
+python -c "
+import json
+d = json.load(open('compliance.json', encoding='utf-8'))
+print(d['checks'])
+" > checks_by_job.txt 2>/dev/null
+BY_FILES=$(curl -s --max-time 180 -X POST http://localhost:8080/api/v1/compliance     -F "result=@result.geojson"     -F "dataset=@data/samples/dataset_lct2026.geojson")
+echo "$BY_FILES" > compliance_files.json
+python -c "
+import json
+a = json.load(open('compliance.json', encoding='utf-8'))
+b = json.load(open('compliance_files.json', encoding='utf-8'))
+assert b['compliant'], 'по файлам найдены нарушения: %d' % b['violations']
+assert a['checks'] == b['checks'], (
+    'сверок по расчёту %d, по файлам %d: проверка должна не зависеть от того, '
+    'откуда взялась выгрузка' % (a['checks'], b['checks']))
+" 2>/dev/null && ok || bad "проверка по файлам расходится с проверкой по расчёту"
 
 step "Интерфейс отдаётся"
 [ "$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 http://localhost:3000/)" = "200" ] \

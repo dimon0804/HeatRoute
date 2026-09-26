@@ -99,9 +99,9 @@ public class JunctionRelocator {
 
     /**
      * @param passable проверка клиренса для каждого нового отрезка
-     * @return суммарный выигрыш в рублях
+     * @return выигрыш в рублях и число положений, проверенных последним проходом
      */
-    public double relocate(RouteTree tree, RoutingGraph graph,
+    public Effort relocate(RouteTree tree, RoutingGraph graph,
                            SteinerTreeBuilder.Passability passable) {
         // Счётчики живут в вызове, а не в поле: компонент один на приложение,
         // а расчёты идут в несколько потоков — поле означало бы, что один расчёт
@@ -109,21 +109,25 @@ public class JunctionRelocator {
         Tally tally = new Tally();
         double total = 0;
         int moved = 0;
+        int verified = 0;
 
         for (int pass = 0; pass < MAX_PASSES; pass++) {
+            tally.considered = 0;
             double gain = relocateOnce(tree, graph, passable, tally);
+            verified = tally.considered;
             if (gain <= 0) {
                 break;
             }
             total += gain;
             moved++;
         }
-        if (tally.considered > 0) {
-            log.debug("Развилки: рассмотрено {}, перенесено {}, положений отвергнуто "
-                            + "препятствиями {}, дешевле на {} руб.",
-                    tally.considered, moved, tally.blocked, Math.round(total));
+        if (verified > 0) {
+            log.debug("Развилки: последний проход проверил {} положений без улучшения, "
+                            + "перенесено за все проходы {}, отвергнуто препятствиями {}, "
+                            + "дешевле на {} руб.",
+                    verified, moved, tally.blocked, Math.round(total));
         }
-        return total;
+        return new Effort(total, verified);
     }
 
     /** Счётчики одного вызова: сколько развилок рассмотрено и сколько положений отвергнуто. */

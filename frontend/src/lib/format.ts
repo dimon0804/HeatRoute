@@ -66,13 +66,27 @@ export function dateTime(iso?: string): string {
   })
 }
 
-/** Склонение числительных: «17 объектов», «1 объект», «2 объекта». */
-export function plural(count: number, one: string, few: string, many: string): string {
+/** Целое число с разделителями разрядов: «2 815». */
+export function integer(value: number): string {
+  return RUB.format(Math.round(value))
+}
+
+/**
+ * Слово в форме, согласованной с числом, без самого числа: «сверок» при 2 815.
+ * Нужно там, где число показывается с разделителями разрядов и подставляется
+ * в строку отдельно.
+ */
+export function pluralWord(count: number, one: string, few: string, many: string): string {
   const mod10 = count % 10
   const mod100 = count % 100
-  if (mod10 === 1 && mod100 !== 11) return `${count} ${one}`
-  if (mod10 >= 2 && mod10 <= 4 && (mod100 < 12 || mod100 > 14)) return `${count} ${few}`
-  return `${count} ${many}`
+  if (mod10 === 1 && mod100 !== 11) return one
+  if (mod10 >= 2 && mod10 <= 4 && (mod100 < 12 || mod100 > 14)) return few
+  return many
+}
+
+/** Склонение числительных: «17 объектов», «1 объект», «2 объекта». */
+export function plural(count: number, one: string, few: string, many: string): string {
+  return `${count} ${pluralWord(count, one, few, many)}`
 }
 
 /** Человеческие названия типов объектов — их видно в легенде и таблицах. */

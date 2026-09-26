@@ -15,7 +15,7 @@ import java.util.Map;
  * выполняется единственный раз, на выгрузке.
  */
 @Value
-@Builder
+@Builder(toBuilder = true)
 public class InputScene {
 
     /** Источник тепловой энергии. По базовой модели кейса он ровно один. */

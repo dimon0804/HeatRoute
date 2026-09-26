@@ -128,6 +128,11 @@ public class VariantPlanner {
          * Ноль — норма; всё остальное должно быть видно снаружи.
          */
         int sharpTurns;
+        /**
+         * Сколько одиночных ходов улучшения проверено на итоговом дереве лучшего
+         * варианта без того, чтобы хоть один из них его улучшил.
+         */
+        int verifiedMoves;
         /** Режим с учётом глубины (дополнительная задача). */
         boolean withDepth;
         /** Пересечения с существующими коммуникациями по глубине, по варианту. */
@@ -339,13 +344,16 @@ public class VariantPlanner {
 
         int sharpTurns = ranked.stream()
                 .mapToInt(CalculationVariant::getSharpTurns).sum();
+        int verifiedMovesTotal = ranked.isEmpty() ? 0
+                : ranked.get(0).getVerifiedMoves();
         if (sharpTurns > 0) {
             log.warn("Вершин, не приведённых к пределу угла поворота 90°: {}. "
                     + "Показатель уходит в сводку прогона", sharpTurns);
         }
 
         return new Plan(ranked, designDn, graph.size(), graph.edgeCount() / 2,
-                located.size(), millis, sharpTurns, withDepth, crossings, depthUnresolved);
+                located.size(), millis, sharpTurns, verifiedMovesTotal, withDepth,
+                crossings, depthUnresolved);
     }
 
     // =================================================================================
@@ -378,6 +386,7 @@ public class VariantPlanner {
         NetworkMaterializer.IdSequence ids = new NetworkMaterializer.IdSequence(variantId);
         Set<String> tieInSignature = new LinkedHashSet<>();
         int sharpTurns = 0;
+        int verifiedMoves = 0;
 
         // Сколько примыканий у каждого узла врезки уже занято другими частями сети
         // этого же варианта. Без этого учёта две независимые части могут выбрать одну
@@ -436,6 +445,7 @@ public class VariantPlanner {
             unconnectedReasons.putAll(best.getUnconnectedReasons());
             chamberMaxDn.putAll(best.getChamberMaxDn());
             sharpTurns += best.getSharpTurns();
+            verifiedMoves += best.getVerifiedMoves();
             tieInSignature.add(best.getTieIn().getExistingObjectId() + "@"
                     + Math.round(best.getTieIn().getPositionFraction() * 100));
         }
@@ -477,6 +487,7 @@ public class VariantPlanner {
                 .tieIns(tieIns)
                 .summary(summary)
                 .sharpTurns(sharpTurns)
+                .verifiedMoves(verifiedMoves)
                 .structureFingerprint(fingerprint)
                 .build();
     }
@@ -605,6 +616,8 @@ public class VariantPlanner {
         double score;
         /** Вершин этой части, не приведённых к пределу угла поворота. */
         int sharpTurns;
+        /** Ходов улучшения, проверенных без успеха на итоговом дереве этой части. */
+        int verifiedMoves;
         /** Узел графа, в котором выполнена врезка. */
         int rootGraphNode;
         /** Сколько участков новой сети приведено в этот узел. */
@@ -706,10 +719,15 @@ public class VariantPlanner {
         // ветви могут пересечься заново.
         SteinerTreeBuilder.Passability clearance = (from, to, exemptOks, requiredDn) ->
                 field.isPassable(from, to, requiredDn, exemptOks) && !barrier.blocks(from, to);
+        // Число ходов последнего прохода, не давшего улучшения, — это и есть ответ
+        // на главный вопрос к эвристике: «а вдруг рядом есть лучше». Он доходит
+        // до показателей расчёта, а не остаётся в журнале.
+        int verifiedMoves = 0;
         for (int round = 0; round < routingProps.getTreePolishRounds(); round++) {
-            double gain = treeImprover.improve(tree, graph, clearance)
-                    + junctionRelocator.relocate(tree, graph, clearance);
-            if (gain <= 0) {
+            Effort reattach = treeImprover.improve(tree, graph, clearance);
+            Effort relocate = junctionRelocator.relocate(tree, graph, clearance);
+            verifiedMoves = reattach.getMovesVerified() + relocate.getMovesVerified();
+            if (reattach.getGain() + relocate.getGain() <= 0) {
                 break;
             }
         }
@@ -791,7 +809,7 @@ public class VariantPlanner {
 
         return new GroupResult(m.getSegments(), chambers, m.getTechnicalNodes(), tieIn,
                 unconnected, reasons, chamberMaxDn, partial.getScore(), m.getSharpTurns(),
-                candidate.getGraphNodeIndex(),
+                verifiedMoves, candidate.getGraphNodeIndex(),
                 built.getTree().childrenOf(candidate.getGraphNodeIndex()).size(),
                 countCrossings(m.getSegments(), acceptedSegments));
     }

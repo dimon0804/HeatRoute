@@ -1,4 +1,6 @@
-import type { ApiErrorBody, Dataset, ForbiddenZone, Job } from './types'
+import type {
+  ApiErrorBody, ComplianceReport, Dataset, ForbiddenZone, Job,
+} from './types'
 
 /**
  * Базовый адрес API. В собранном виде запросы идут через тот же nginx, что раздаёт
@@ -102,6 +104,27 @@ export const api = {
   statementUrl(jobId: string, variantCode?: string | null): string {
     const suffix = variantCode ? `?variantCode=${encodeURIComponent(variantCode)}` : ''
     return `${BASE}/v1/jobs/${jobId}/statement.csv${suffix}`
+  },
+
+  /**
+   * Проверка сохранённого результата расчёта на соответствие приложению.
+   * Сверяется тот же файл, который уходит заказчику, вместе с входным набором,
+   * по которому он получен.
+   */
+  jobCompliance(jobId: string): Promise<ComplianceReport> {
+    return request<ComplianceReport>(`/v1/jobs/${jobId}/compliance`)
+  },
+
+  /**
+   * Проверка произвольной выгрузки: выходной GeoJSON вместе с входным набором.
+   * Сервис ничего не знает о том, каким расчётом получен файл, поэтому проверить
+   * можно и выгрузку подрядчика.
+   */
+  checkCompliance(result: File, dataset: File): Promise<ComplianceReport> {
+    const form = new FormData()
+    form.append('result', result)
+    form.append('dataset', dataset)
+    return request<ComplianceReport>('/v1/compliance', { method: 'POST', body: form })
   },
 
   /** Результат расчёта как GeoJSON — для отрисовки на карте. */

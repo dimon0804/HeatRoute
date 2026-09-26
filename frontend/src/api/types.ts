@@ -146,6 +146,42 @@ export interface ResultChamberProps {
   cost: number
 }
 
+/**
+ * Одно нарушение правила приложения.
+ * <p>
+ * Формулировка требования приходит вместе с кодом правила намеренно: читателю
+ * отчёта нужна фраза, которую он сверит с приложением, а не ссылка на правило.
+ */
+export interface ComplianceFinding {
+  rule: string
+  title: string
+  requirement: string
+  /** Вариант, к которому относится нарушение. У правил уровня выгрузки его нет. */
+  variantId?: string
+  objectIds: string[]
+  detail: string
+}
+
+/**
+ * Отчёт о соответствии выгрузки техническому приложению.
+ * <p>
+ * Число сверок стоит рядом с числом нарушений не для полноты: «нарушений нет»
+ * без него ничего не значит, потому что сверок могло быть ноль.
+ * <p>
+ * Пустые поля бэкенд в ответе опускает, поэтому списки здесь читаются
+ * с подстановкой пустого значения.
+ */
+export interface ComplianceReport {
+  compliant: boolean
+  checks: number
+  violations: number
+  variantIds?: string[]
+  objectCounts?: Record<string, number>
+  findings?: ComplianceFinding[]
+  /** Правила, которые проверить не удалось, и почему. */
+  skipped?: string[]
+}
+
 export interface ApiErrorBody {
   status: number
   error: string

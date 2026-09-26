@@ -138,6 +138,7 @@ public class JobStateWriter {
                     .tieInCandidates(plan.getTieInCandidates())
                     .millis(duration.toMillis())
                     .sharpTurns(plan.getSharpTurns())
+                    .verifiedMoves(plan.getVerifiedMoves())
                     .depthUnresolved(plan.getDepthUnresolvedByVariant().values().stream()
                             .mapToInt(java.util.List::size).sum())
                     .build()));
