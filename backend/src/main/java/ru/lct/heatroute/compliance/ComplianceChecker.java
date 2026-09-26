@@ -115,8 +115,12 @@ public class ComplianceChecker {
 
             checkGeometryKind(session, feature, type, id);
 
-            variants.computeIfAbsent(String.valueOf(feature.str("variant_id")), Variant::new)
-                    .add(type, feature);
+            // Объект без variant_id — это нарушение состава, оно уже отмечено выше.
+            // Но в перечень вариантов такое значение попадать не должно: «вариант null»
+            // в отчёте выглядит как ошибка отчёта, а не как ошибка выгрузки.
+            String variantId = feature.str("variant_id");
+            variants.computeIfAbsent(variantId == null ? "без variant_id" : variantId,
+                    Variant::new).add(type, feature);
         }
 
         for (Variant variant : variants.values()) {

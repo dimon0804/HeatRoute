@@ -47,6 +47,20 @@ public class ApiExceptionHandler {
                 "Файл превышает допустимый размер загрузки", request, null);
     }
 
+    /**
+     * Не приложена одна из частей многочастного запроса. Без этого обработчика Spring
+     * отдавал пятисотку на забытый файл, а это ошибка запроса, а не сервиса: проверяющий
+     * должен понять, что именно он не приложил.
+     */
+    @ExceptionHandler(org.springframework.web.multipart.support.MissingServletRequestPartException.class)
+    public ResponseEntity<ApiError> missingPart(
+            org.springframework.web.multipart.support.MissingServletRequestPartException e,
+            HttpServletRequest request) {
+        return build(HttpStatus.BAD_REQUEST,
+                "В запросе не приложена часть «" + e.getRequestPartName() + "»",
+                request, null);
+    }
+
     @ExceptionHandler(MethodArgumentNotValidException.class)
     public ResponseEntity<ApiError> invalid(MethodArgumentNotValidException e,
                                             HttpServletRequest request) {
