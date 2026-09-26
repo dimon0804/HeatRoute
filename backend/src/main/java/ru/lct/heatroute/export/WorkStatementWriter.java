@@ -66,15 +66,28 @@ public class WorkStatementWriter {
         private final String description;
         private final double score;
         private final String generatedAt;
+        /**
+         * Атрибуты сводной записи варианта. Врезки в существующие камеры перестали
+         * быть отдельными объектами выгрузки, и их количество со стоимостью теперь
+         * известно только из сводки — иначе итог ведомости не сойдётся со стоимостью
+         * варианта.
+         */
+        private final Map<String, Object> summary;
 
         public Header(String datasetName, String variantCode, int rank, String description,
-                      double score, String generatedAt) {
+                      double score, String generatedAt, Map<String, Object> summary) {
             this.datasetName = datasetName;
             this.variantCode = variantCode;
             this.rank = rank;
             this.description = description;
             this.score = score;
             this.generatedAt = generatedAt;
+            this.summary = summary == null ? Map.of() : summary;
+        }
+
+        private double number(String key) {
+            Object value = summary.get(key);
+            return value instanceof Number ? ((Number) value).doubleValue() : 0;
         }
     }
 
@@ -85,11 +98,9 @@ public class WorkStatementWriter {
         writeHeader(writer, header);
         writeNewSegments(writer, rows);
         writeChambers(writer, rows);
-        writeTieIns(writer, rows);
-        writeReconstruction(writer, rows);
         writeDepthCrossings(writer, rows);
         writeDiameterSummary(writer, rows);
-        writeTotals(writer, rows);
+        writeTotals(writer, rows, header);
 
         writer.flush();
     }
@@ -137,7 +148,7 @@ public class WorkStatementWriter {
         if (chambers.isEmpty()) {
             return;
         }
-        line(w, "ТЕПЛОВЫЕ КАМЕРЫ");
+        line(w, "НОВЫЕ ТЕПЛОВЫЕ КАМЕРЫ");
         line(w, "№", "Камера", "ДУ, мм", "Примыканий", "Стоимость, руб.");
 
         int index = 0;
@@ -152,78 +163,6 @@ public class WorkStatementWriter {
         line(w, "");
     }
 
-    private void writeTieIns(Writer w, List<Row> rows) throws IOException {
-        List<Row> tieIns = of(rows, "tie_in");
-        if (tieIns.isEmpty()) {
-            return;
-        }
-        line(w, "ВРЕЗКИ В СУЩЕСТВУЮЩУЮ СЕТЬ");
-        line(w, "№", "Врезка", "Объект врезки", "Тип объекта", "ДУ объекта, мм",
-                "Требуемый ДУ, мм", "Доп. расход, т/ч", "Стоимость, руб.");
-
-        int index = 0;
-        for (Row row : tieIns) {
-            line(w,
-                    String.valueOf(++index),
-                    row.id,
-                    row.text("existing_object_id"),
-                    objectLabel(row.text("existing_object_type")),
-                    String.valueOf((long) row.number("existing_diameter")),
-                    String.valueOf((long) row.number("required_diameter")),
-                    decimal(row.number("added_flow_tph"), 2),
-                    decimal(row.number("cost"), 0));
-        }
-        line(w, "");
-    }
-
-    private void writeReconstruction(Writer w, List<Row> rows) throws IOException {
-        List<Row> segments = of(rows, "heat_network_reconstruction");
-        List<Row> chambers = of(rows, "heat_chamber_reconstruction");
-        if (segments.isEmpty() && chambers.isEmpty()) {
-            return;
-        }
-        line(w, "РЕКОНСТРУКЦИЯ СУЩЕСТВУЮЩЕЙ СЕТИ");
-
-        if (!segments.isEmpty()) {
-            line(w, "№", "Участок", "Расход был, т/ч", "Расход стал, т/ч",
-                    "ДУ был, мм", "ДУ стал, мм", "Длина, м", "Стоимость, руб.");
-            int index = 0;
-            for (Row row : segments) {
-                line(w,
-                        String.valueOf(++index),
-                        row.id,
-                        decimal(row.number("flow_before_tph"), 2),
-                        decimal(row.number("flow_after_tph"), 2),
-                        String.valueOf((long) row.number("diameter_before")),
-                        String.valueOf((long) row.number("diameter_after")),
-                        decimal(row.number("length"), 1),
-                        decimal(row.number("cost"), 0));
-            }
-        }
-        if (!chambers.isEmpty()) {
-            line(w, "");
-            line(w, "№", "Камера", "ДУ был, мм", "ДУ стал, мм", "Стоимость, руб.");
-            int index = 0;
-            for (Row row : chambers) {
-                line(w,
-                        String.valueOf(++index),
-                        row.id,
-                        String.valueOf((long) row.number("diameter_before")),
-                        String.valueOf((long) row.number("diameter_after")),
-                        decimal(row.number("cost"), 0));
-            }
-        }
-        line(w, "");
-    }
-
-    /**
-     * Пересечения по глубине — только в расчёте с глубиной; в плоском разделе не будет.
-     * <p>
-     * Денег этот раздел не добавляет: стоимость заглубления уже сидит в участках
-     * через коэффициент по глубине. Но проектировщику нужен перечень мест, где трасса
-     * расходится с существующими коммуникациями по вертикали, — по нему делают
-     * рабочие чертежи узлов.
-     */
     private void writeDepthCrossings(Writer w, List<Row> rows) throws IOException {
         List<Row> crossings = of(rows, "depth_crossing");
         if (crossings.isEmpty()) {
@@ -279,28 +218,26 @@ public class WorkStatementWriter {
         line(w, "");
     }
 
-    private void writeTotals(Writer w, List<Row> rows) throws IOException {
+    private void writeTotals(Writer w, List<Row> rows, Header header) throws IOException {
         double newLength = sum(rows, "heat_network", "length");
-        double reconLength = sum(rows, "heat_network_reconstruction", "length");
+        double segmentCost = sum(rows, "heat_network", "cost");
+        double chamberCost = sum(rows, "heat_chamber", "cost");
+        int tieInCount = (int) header.number("existing_chamber_tie_in_count");
+        double tieInCost = header.number("existing_chamber_tie_in_cost");
+        double penalty = header.number("unconnected_penalty");
 
         line(w, "ИТОГО");
         line(w, "Раздел", "Количество", "Длина, м", "Стоимость, руб.");
-        total(w, "Новые участки сети", of(rows, "heat_network").size(), newLength,
-                sum(rows, "heat_network", "cost"));
-        total(w, "Тепловые камеры", of(rows, "heat_chamber").size(), 0,
-                sum(rows, "heat_chamber", "cost"));
-        total(w, "Врезки", of(rows, "tie_in").size(), 0, sum(rows, "tie_in", "cost"));
-        total(w, "Реконструкция участков", of(rows, "heat_network_reconstruction").size(),
-                reconLength, sum(rows, "heat_network_reconstruction", "cost"));
-        total(w, "Реконструкция камер", of(rows, "heat_chamber_reconstruction").size(), 0,
-                sum(rows, "heat_chamber_reconstruction", "cost"));
+        total(w, "Новые участки сети", of(rows, "heat_network").size(), newLength, segmentCost);
+        total(w, "Новые тепловые камеры", of(rows, "heat_chamber").size(), 0, chamberCost);
+        total(w, "Врезки в существующие камеры", tieInCount, 0, tieInCost);
 
-        double cost = sum(rows, "heat_network", "cost")
-                + sum(rows, "heat_chamber", "cost")
-                + sum(rows, "tie_in", "cost")
-                + sum(rows, "heat_network_reconstruction", "cost")
-                + sum(rows, "heat_chamber_reconstruction", "cost");
-        line(w, "ВСЕГО", "", decimal(newLength + reconLength, 1), decimal(cost, 0));
+        double construction = segmentCost + chamberCost + tieInCost;
+        line(w, "Стоимость строительства", "", decimal(newLength, 1), decimal(construction, 0));
+        if (penalty > 0) {
+            total(w, "Штраф за неподключённые точки", 0, 0, penalty);
+        }
+        line(w, "ВСЕГО", "", decimal(newLength, 1), decimal(construction + penalty, 0));
     }
 
     private void total(Writer w, String label, int count, double length, double cost)
@@ -334,9 +271,12 @@ public class WorkStatementWriter {
             return "";
         }
         // Коды те же, что в выгрузке (LayingMethod): ведомость читает человек,
-        // и «base» ему ничего не говорит.
+        // и «base» ему ничего не говорит. Названия — из раздела 4 приложения:
+        // «обычный участок» и «специальный проход». Прежнее «подземная бесканальная»
+        // относилось к способу прокладки как таковому, а не к значению атрибута,
+        // и в паре со «специальным проходом» читалось как разные вещи из разных рядов.
         Map<String, String> labels = new LinkedHashMap<>();
-        labels.put("base", "подземная бесканальная");
+        labels.put("base", "обычный участок");
         labels.put("special", "специальный проход");
         return labels.getOrDefault(method, method);
     }
@@ -350,9 +290,15 @@ public class WorkStatementWriter {
         labels.put("heat_network", "участок сети");
         labels.put("water", "водный объект");
         labels.put("gas", "газопровод");
+        labels.put("gas_pipeline", "газопровод");
         labels.put("power_cable", "силовой кабель");
         labels.put("road", "дорога");
         labels.put("tram_tracks", "трамвайные пути");
+        labels.put("railway", "железная дорога");
+        labels.put("park", "парк");
+        labels.put("social_area", "территория социального объекта");
+        labels.put("prohibited_site", "запрещённая территория");
+        labels.put("oks_existing", "объект капитального строительства");
         return labels.getOrDefault(type, type);
     }
 

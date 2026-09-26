@@ -122,8 +122,7 @@ public class CalculationService {
         long started = System.nanoTime();
 
         try {
-            InputScene scene = datasets.parse(job.getDataset(),
-                    request.getExistingFlowMode(), request.getExistingFlowFraction());
+            InputScene scene = datasets.parse(job.getDataset());
             state.progress(jobId, JobStatus.RUNNING, 0.03, "Исходные данные разобраны");
 
             VariantPlanner.Plan plan = planner.plan(scene,

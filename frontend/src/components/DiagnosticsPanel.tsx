@@ -97,9 +97,9 @@ function toneOf(severity: Severity) {
 function dotOf(severity: Severity) {
   switch (severity) {
     case 'ERROR':
-      return 'bg-tie'
+      return 'bg-alert'
     case 'WARNING':
-      return 'bg-recon'
+      return 'bg-warn'
     case 'ASSUMPTION':
       return 'bg-accent'
     default:

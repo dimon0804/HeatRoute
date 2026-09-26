@@ -16,7 +16,8 @@ interface Props {
  * <p>
  * Раздел 2.8 ТЗ требует показать содержательно разные варианты и объяснить их
  * ранжирование. Поэтому здесь не просто список: у каждого варианта расписаны
- * все шесть составляющих стоимости и показано, из чего складывается показатель S.
+ * три составляющие стоимости строительства и показано, из чего складывается
+ * показатель S.
  */
 export function VariantsPanel({
   job, activeVariant, onSelectVariant, onExport, onExportStatement,
@@ -40,7 +41,7 @@ export function VariantsPanel({
   if (job.status === 'FAILED') {
     return (
       <Section title="Расчёт прерван">
-        <p className="text-[13px] text-tie">{job.errorMessage}</p>
+        <p className="text-[13px] text-alert">{job.errorMessage}</p>
       </Section>
     )
   }
@@ -59,8 +60,9 @@ export function VariantsPanel({
             <Button
               variant="ghost"
               onClick={onExportStatement}
-              title="Перечень участков, камер, врезок и реконструкции со сводом
-                     по диаметрам и итогом — таблица для Excel"
+              title="Перечень новых участков, новых тепловых камер и врезок
+                     в существующие камеры со сводом по диаметрам и итогом,
+                     таблица для Excel"
             >
               Ведомость объёмов работ
             </Button>
@@ -100,9 +102,9 @@ export function VariantsPanel({
 
       {job.variants.some((v) => v.summary.unconnectedOksIds.length > 0) && (
         <Section
-          title="ОКС без автоматического маршрута"
-          hint="Раздел 2.9 ТЗ: построенная часть результата сохраняется, за каждый
-                неподключённый объект начисляется штраф"
+          title="Точки подключения без маршрута"
+          hint="Раздел 2.9 ТЗ: построенная часть результата сохраняется, за каждую
+                неподключённую точку начисляется штраф"
         >
           {job.variants
             .filter((v) => v.summary.unconnectedOksIds.length > 0)
@@ -113,13 +115,13 @@ export function VariantsPanel({
                 </p>
                 <ul className="space-y-1.5">
                   {v.summary.unconnectedOksIds.map((id) => (
-                    <li key={id} className="rounded-md bg-ink/60 px-2.5 py-1.5">
-                      <Badge tone="bad">{id}</Badge>
+                    <li key={String(id)} className="rounded-md bg-ink/60 px-2.5 py-1.5">
+                      <Badge tone="bad">{String(id)}</Badge>
                       {/* Список идентификаторов без объяснения бесполезен: раздел 2.9
                           требует обработать случай, а обработать — значит сказать,
-                          что именно с объектом не так. */}
+                          что именно с точкой не так. */}
                       <p className="mt-1 text-[11.5px] leading-snug text-muted">
-                        {v.summary.unconnectedReasons?.[id] ?? 'Причина не определена'}
+                        {v.summary.unconnectedReasons?.[String(id)] ?? 'Причина не определена'}
                       </p>
                     </li>
                   ))}
@@ -136,7 +138,9 @@ export function VariantsPanel({
           <Row label="ДУ для расчёта клиренсов" value={`${job.stats.designDiameter} мм`} mono />
           <Row label="Узлов в графе видимости" value={job.stats.graphNodes.toLocaleString('ru-RU')} mono />
           <Row label="Рёбер в графе" value={job.stats.graphEdges.toLocaleString('ru-RU')} mono />
-          <Row label="Кандидатов точек врезки" value={job.stats.tieInCandidates} mono />
+          {job.stats.tieInCandidates != null && (
+            <Row label="Кандидатов мест присоединения" value={job.stats.tieInCandidates} mono />
+          )}
         </Section>
       )}
     </>
@@ -153,6 +157,14 @@ function VariantCard({ variant, best, active, onSelect }: {
   const delta = best && best.variantCode !== variant.variantCode
     ? s.calculatedCost - best.summary.calculatedCost
     : 0
+
+  // Стоимость новых участков в сводке отдельным полем не передаётся: она равна
+  // стоимости строительства без камер и без врезок в существующие камеры.
+  const newSegmentsCost = s.constructionCost - s.chamberConstructionCost
+    - s.existingChamberTieInCost
+  // Слагаемые показателя S — чтобы разбор сходился с формулой построчно.
+  const costTerm = 0.7 * (s.calculatedCost / 25_000_000)
+  const lengthTerm = 0.3 * (s.newNetworkLength / 100)
 
   return (
     <button
@@ -180,16 +192,19 @@ function VariantCard({ variant, best, active, onSelect }: {
 
       <div className="mt-2 flex flex-wrap gap-1">
         <Badge tone="info">{moneyShort(s.calculatedCost)}</Badge>
-        <Badge>{meters(s.length)}</Badge>
+        <Badge>{meters(s.newNetworkLength)}</Badge>
         <Badge>{plural(variant.featureCounts?.heat_network ?? 0, 'участок', 'участка', 'участков')}</Badge>
-        <Badge>{plural(variant.featureCounts?.tie_in ?? 0, 'врезка', 'врезки', 'врезок')}</Badge>
         <Badge>{plural(variant.featureCounts?.heat_chamber ?? 0, 'камера', 'камеры', 'камер')}</Badge>
+        <Badge>{plural(s.existingChamberTieInCount, 'врезка', 'врезки', 'врезок')}</Badge>
         {s.unconnectedOksIds.length > 0 && (
           <Badge tone="bad">не подключено: {s.unconnectedOksIds.length}</Badge>
         )}
+        {/* Пересечения по глубине в выгрузку не входят, приложение таких объектов
+            не предусматривает, но расчёт их знает и отдаёт в подсчётах. По этому
+            числу видно, у какого варианта профиль по глубине содержателен. */}
         {(variant.featureCounts?.depth_crossing ?? 0) > 0 && (
           <Badge tone="info">
-            {plural(variant.featureCounts?.depth_crossing ?? 0,
+            {plural(variant.featureCounts.depth_crossing,
               'пересечение по глубине', 'пересечения по глубине', 'пересечений по глубине')}
           </Badge>
         )}
@@ -199,26 +214,36 @@ function VariantCard({ variant, best, active, onSelect }: {
       {active && (
         <div className="mt-3 border-t border-edge pt-2">
           <p className="mb-1 text-[11px] uppercase tracking-wide text-muted">Из чего сложилась стоимость</p>
-          <Row label="Новые участки сети" value={money(s.constructionCost)} mono />
+          {/* Три слагаемых стоимости строительства. Первое приходит не отдельным
+              полем, а остатком: сводка передаёт стоимость строительства целиком
+              и выделяет из неё камеры и врезки. */}
+          <Row label="Новые участки сети" value={money(newSegmentsCost)} mono />
           <Row label="Новые тепловые камеры" value={money(s.chamberConstructionCost)} mono />
-          <Row label="Врезки" value={money(s.tieInCost)} mono />
-          <Row label="Реконструкция участков" value={money(s.reconstructionCost)} mono />
-          <Row label="Реконструкция камер" value={money(s.chamberReconstructionCost)} mono />
+          <Row
+            label={`Врезки в существующие камеры, ${s.existingChamberTieInCount}`}
+            value={money(s.existingChamberTieInCost)}
+            mono
+          />
+          <div className="mt-1 border-t border-edge pt-1">
+            <Row label="Стоимость строительства" value={money(s.constructionCost)} mono />
+          </div>
           {s.unconnectedPenalty > 0 && (
-            <Row label="Штраф за неподключенные ОКС" value={money(s.unconnectedPenalty)} mono />
+            <Row label="Штраф за неподключённые точки" value={money(s.unconnectedPenalty)} mono />
           )}
           <div className="mt-1 border-t border-edge pt-1">
             <Row label="Итого" value={money(s.calculatedCost)} mono accent />
           </div>
 
-          <p className="mt-3 mb-1 text-[11px] uppercase tracking-wide text-muted">Протяжённость работ</p>
+          <p className="mt-3 mb-1 text-[11px] uppercase tracking-wide text-muted">Показатель варианта</p>
           <Row label="Новая сеть" value={meters(s.newNetworkLength)} mono />
-          <Row label="Реконструкция" value={meters(s.reconstructionLength)} mono />
-          <Row label="Всего" value={meters(s.length)} mono accent />
+          <Row label="Вклад стоимости, 0,7 · C / 25 000 000" value={score(costTerm)} mono />
+          <Row label="Вклад длины, 0,3 · L / 100" value={score(lengthTerm)} mono />
+          <Row label="S" value={score(s.score)} mono accent />
 
           <p className="mt-3 rounded bg-ink/60 px-2 py-1.5 font-mono text-[11px] leading-relaxed text-muted">
             S = 0,7 · {Math.round(s.calculatedCost).toLocaleString('ru-RU')} / 25 000 000
-            {' + '}0,3 · {s.length.toLocaleString('ru-RU')} / 100 = {score(s.score)}
+            {' + '}0,3 · {s.newNetworkLength.toLocaleString('ru-RU', { maximumFractionDigits: 1 })}
+            {' / '}100 = {score(s.score)}
           </p>
         </div>
       )}

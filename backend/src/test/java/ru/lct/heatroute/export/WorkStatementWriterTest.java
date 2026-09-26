@@ -17,6 +17,11 @@ import static org.assertj.core.api.Assertions.assertThat;
  * локали должен разобрать его на столбцы и увидеть в числах числа, а суммы в итогах
  * должны сходиться со строками выше. Ведомость, где итог не равен сумме, хуже,
  * чем её отсутствие.
+ * <p>
+ * Разделы врезок и реконструкции из ведомости ушли вместе с объектами выгрузки.
+ * Врезки в существующие камеры остались только в итогах, и количество со стоимостью
+ * ведомость берёт из сводной записи варианта: отдельных объектов, по которым их можно
+ * было бы пересчитать, больше нет.
  */
 class WorkStatementWriterTest {
 
@@ -35,10 +40,15 @@ class WorkStatementWriterTest {
     }
 
     private String statement(List<WorkStatementWriter.Row> rows) throws Exception {
+        return statement(rows, Map.of());
+    }
+
+    private String statement(List<WorkStatementWriter.Row> rows,
+                             Map<String, Object> summary) throws Exception {
         ByteArrayOutputStream out = new ByteArrayOutputStream();
         writer.write(out, new WorkStatementWriter.Header(
                 "dataset.geojson", "v2", 1, "сеть разделена на 3 части", 13.614,
-                "18.09.2026 12:00"), rows);
+                "18.09.2026 12:00", summary), rows);
         return new String(out.toByteArray(), StandardCharsets.UTF_8);
     }
 
@@ -71,22 +81,66 @@ class WorkStatementWriterTest {
     }
 
     @Test
-    @DisplayName("Итог сходится с суммой строк")
+    @DisplayName("Итог сходится с суммой строк и врезками из сводки")
     void totalsMatchRows() throws Exception {
         String text = statement(List.of(
-                segment("s1", 200, 100.0, 12_000_000, "base"),
-                segment("s2", 125, 50.0, 5_000_000, "special"),
-                new WorkStatementWriter.Row("heat_chamber", "ch1",
-                        Map.of("diameter", 200, "degree", 3, "cost", 3_000_000.0)),
-                new WorkStatementWriter.Row("tie_in", "t1",
-                        Map.of("existing_object_id", "121", "existing_object_type", "heat_network",
-                                "existing_diameter", 300, "required_diameter", 400,
-                                "added_flow_tph", 42.5, "cost", 5_000_000.0))));
+                        segment("s1", 200, 100.0, 12_000_000, "base"),
+                        segment("s2", 125, 50.0, 5_000_000, "special"),
+                        new WorkStatementWriter.Row("heat_chamber", "ch1",
+                                Map.of("diameter", 200, "degree", 3, "cost", 3_000_000.0))),
+                // Одна врезка в существующую камеру: объекта под неё в выгрузке нет,
+                // количество и стоимость приходят сводной записью варианта.
+                Map.of("existing_chamber_tie_in_count", 1,
+                        "existing_chamber_tie_in_cost", 5_000_000.0));
 
         assertThat(text).contains("Новые участки сети;2;150,0;17000000");
-        assertThat(text).contains("Тепловые камеры;1;;3000000");
-        assertThat(text).contains("Врезки;1;;5000000");
+        assertThat(text).contains("Новые тепловые камеры;1;;3000000");
+        assertThat(text).contains("Врезки в существующие камеры;1;;5000000");
+        assertThat(text)
+                .as("стоимость строительства — участки плюс камеры плюс врезки")
+                .contains("Стоимость строительства;;150,0;25000000");
         assertThat(text).contains("ВСЕГО;;150,0;25000000");
+    }
+
+    @Test
+    @DisplayName("Разделов врезок и реконструкции в ведомости нет")
+    void noTieInAndReconstructionSections() throws Exception {
+        String text = statement(List.of(
+                        segment("s1", 200, 100.0, 12_000_000, "base"),
+                        new WorkStatementWriter.Row("heat_chamber", "ch1",
+                                Map.of("diameter", 200, "degree", 3, "cost", 3_000_000.0))),
+                Map.of("existing_chamber_tie_in_count", 2,
+                        "existing_chamber_tie_in_cost", 10_000_000.0));
+
+        assertThat(text)
+                .as("отдельного объекта врезки больше нет, перечислять нечего")
+                .doesNotContain("ВРЕЗКИ В СУЩЕСТВУЮЩУЮ СЕТЬ");
+        assertThat(text)
+                .as("реконструкция выведена из расчётной модели")
+                .doesNotContain("РЕКОНСТРУКЦИЯ");
+        assertThat(text)
+                .as("в итогах врезки остались строкой по данным сводки")
+                .contains("Врезки в существующие камеры;2;;10000000");
+    }
+
+    @Test
+    @DisplayName("Штраф за неподключённые точки виден отдельной строкой и входит в итог")
+    void penaltyIsShownSeparately() throws Exception {
+        String text = statement(List.of(segment("s1", 200, 100.0, 12_000_000, "base")),
+                Map.of("unconnected_penalty", 104_000_000.0));
+
+        assertThat(text).contains("Штраф за неподключённые точки;0;;104000000");
+        assertThat(text).contains("Стоимость строительства;;100,0;12000000");
+        assertThat(text).contains("ВСЕГО;;100,0;116000000");
+    }
+
+    @Test
+    @DisplayName("Без штрафа строки штрафа в ведомости нет")
+    void noPenaltyRowWhenNothingUnconnected() throws Exception {
+        String text = statement(List.of(segment("s1", 200, 100.0, 12_000_000, "base")));
+
+        assertThat(text).doesNotContain("Штраф за неподключённые точки");
+        assertThat(text).contains("ВСЕГО;;100,0;12000000");
     }
 
     @Test
@@ -120,6 +174,9 @@ class WorkStatementWriterTest {
     @Test
     @DisplayName("Пересечения по глубине попадают в ведомость с отметкой о норме")
     void depthCrossingsAreListed() throws Exception {
+        // В выходной файл пересечения по глубине не идут: приложение их не предусматривает.
+        // В ведомость идут — она адресована человеку, и просвет над существующей
+        // коммуникацией он проверяет глазами.
         String text = statement(List.of(
                 segment("s1", 200, 100.0, 12_000_000, "base"),
                 new WorkStatementWriter.Row("depth_crossing", "dc1", Map.of(
@@ -158,7 +215,7 @@ class WorkStatementWriterTest {
         writer.write(out, new WorkStatementWriter.Header(
                         "dataset.geojson", "v2", 1,
                         "сеть разделена на 3 части; врезка в камеру 108", 13.614,
-                        "18.09.2026 12:00"),
+                        "18.09.2026 12:00", Map.of()),
                 List.of(segment("s1", 200, 100.0, 12_000_000, "base")));
         String text = new String(out.toByteArray(), StandardCharsets.UTF_8);
 

@@ -5,7 +5,7 @@ import lombok.Value;
 import org.locationtech.jts.geom.Geometry;
 import ru.lct.heatroute.domain.reference.ReferenceProperties.RestrictionRow;
 
-/** Пространственное ограничение с уже разрешённым правилом учёта (таблица 5.1 ТП). */
+/** Пространственное ограничение с уже разрешённым правилом учёта (таблица 2 ТП). */
 @Value
 @Builder(toBuilder = true)
 public class RestrictionObject {
@@ -18,7 +18,7 @@ public class RestrictionObject {
     /** Значение {@code restriction_type} как оно пришло во входных данных. */
     String rawType;
 
-    /** Тип после разрешения псевдонима — ключ таблицы 5.1. */
+    /** Тип после разрешения псевдонима — ключ таблицы 2. */
     String canonicalType;
 
     /** Правило учёта из справочника. */

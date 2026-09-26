@@ -16,6 +16,8 @@ import ru.lct.heatroute.routing.RoutingGraph;
 import ru.lct.heatroute.variant.RouteTree;
 
 import java.util.ArrayList;
+import java.util.ArrayDeque;
+import java.util.Deque;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -27,26 +29,50 @@ import java.util.TreeSet;
  * Превращение дерева маршрутов в участки новой сети с расходами, условными диаметрами,
  * способом прокладки, камерами, техническими узлами и стоимостью.
  * <p>
- * Здесь выполняются три правила, которые проверяются экспертами построчно:
+ * Раздел 2.3 ТП в редакции от 18.09 задаёт подбор диаметра строже, чем первая редакция,
+ * и три его требования определили устройство этого класса:
  * <ul>
- *   <li>расход участка равен сумме расходов ОКС его поддерева, условный диаметр —
- *       минимальный с достаточной пропускной способностью (раздел 3 ТП);</li>
- *   <li>предельная длина считается для непрерывной части одного ДУ; камера отсчёт
- *       не прерывает, смена ДУ — прерывает. При исчерпании предела ДУ повышается
- *       на ступень и в этой точке ставится технический узел;</li>
- *   <li>у одного участка один набор расчётных параметров: где меняется ДУ, способ
- *       прокладки или коэффициент стоимости, линия делится, и в точке деления
- *       появляется технический узел (раздел 8.1 ТП).</li>
+ *   <li>«На пути между узлами, в которых меняется расчётный расход, выбранный ДУ
+ *       сохраняется на всей длине» — значит диаметр нельзя менять посреди перегона.
+ *       Поэтому дерево сначала разбирается на перегоны между узлами смены расхода,
+ *       и диаметр назначается перегону целиком, а не по мере накопления длины;</li>
+ *   <li>«Предельная длина проверяется отдельно по каждому непрерывному пути. Общий
+ *       участок разветвлённой сети учитывается в каждом соответствующем пути. Длины
+ *       параллельных ветвей между собой не суммируются» — значит предел проверяется
+ *       по путям от места присоединения до каждой точки подключения, а не по дереву
+ *       в целом. Если путь не укладывается, повышается диаметр всего непрерывного
+ *       участка одного ДУ: «изменять ДУ только для начала нового отсчёта нельзя»;</li>
+ *   <li>«По направлению от точки подключения к месту присоединения условный диаметр
+ *       новой сети не должен уменьшаться» — инвариант, который поддерживается явно:
+ *       диаметр родительского перегона не меньше диаметра любого из дочерних.</li>
  * </ul>
+ * Эти три правила тянут друг друга: повышение диаметра по предельной длине может
+ * нарушить монотонность, а выравнивание монотонности склеивает соседние перегоны
+ * в более длинный непрерывный участок одного ДУ и снова упирается в предел. Поэтому
+ * назначение диаметров — небольшой цикл до стабилизации; диаметры в нём только растут,
+ * так что цикл конечен.
+ * <p>
+ * У одного участка выгрузки один набор расчётных параметров. Диаметр внутри перегона
+ * уже постоянен, поэтому делить линию остаётся только по границам специальных проходов,
+ * и в точке деления появляется технический узел (раздел 4 ТП).
  */
 @Slf4j
 @Component
 public class NetworkMaterializer {
 
-    private final ReferenceCatalog catalog;
+    /**
+     * Ограничение на число проходов назначения диаметров. Диаметры только растут
+     * и ступеней в справочнике восемнадцать, поэтому до предела дело дойти не должно;
+     * он стоит как страховка от бесконечного цикла на неожиданных данных.
+     */
+    private static final int MAX_DIAMETER_PASSES = 256;
 
-    public NetworkMaterializer(ReferenceCatalog catalog) {
+    private final ReferenceCatalog catalog;
+    private final TurnLimiter turnLimiter;
+
+    public NetworkMaterializer(ReferenceCatalog catalog, TurnLimiter turnLimiter) {
         this.catalog = catalog;
+        this.turnLimiter = turnLimiter;
     }
 
     /** Результат материализации одной независимой части новой сети. */
@@ -55,7 +81,7 @@ public class NetworkMaterializer {
         List<NewSegment> segments;
         List<NewChamberResult> chambers;
         List<TechnicalNodeResult> technicalNodes;
-        /** Условный диаметр новой сети в точке врезки, мм. */
+        /** Условный диаметр новой сети в месте присоединения, мм. */
         int rootDiameter;
         /** Расход, вносимый этой частью в существующую сеть, т/ч. */
         double rootFlow;
@@ -63,6 +89,11 @@ public class NetworkMaterializer {
         List<String> overCapacityOks;
         /** Наибольший ДУ участков, примыкающих к каждому узлу-камере. */
         Map<String, Integer> chamberMaxDiameter;
+        /**
+         * Сколько поворотов круче 90° не удалось привести к пределу раздела 2.1 ТП.
+         * Ноль — норма; всё остальное надо показывать, а не прятать.
+         */
+        int sharpTurns;
     }
 
     /** Счётчик идентификаторов выходных объектов в пределах варианта. */
@@ -94,8 +125,34 @@ public class NetworkMaterializer {
         }
     }
 
-    /** Накопление одного выходного участка по пути обхода дерева. */
-    private static class OpenSegment {
+    /**
+     * Перегон: путь дерева между двумя соседними узлами, в которых меняется расчётный
+     * расход. Внутри перегона расход постоянен, поэтому и условный диаметр один.
+     * Промежуточные узлы перегона — обычные повороты, они остаются вершинами линии.
+     */
+    private static final class Stretch {
+        final int parent;
+        final List<Integer> nodes = new ArrayList<>();
+        final List<Integer> children = new ArrayList<>();
+        double flow;
+        double length;
+        int dn;
+
+        Stretch(int parent) {
+            this.parent = parent;
+        }
+
+        int startNode() {
+            return nodes.get(0);
+        }
+
+        int endNode() {
+            return nodes.get(nodes.size() - 1);
+        }
+    }
+
+    /** Накопление одного выходного участка вдоль перегона. */
+    private static final class OpenSegment {
         String startNodeId;
         final List<Coordinate> coords = new ArrayList<>();
         double flow;
@@ -104,23 +161,14 @@ public class NetworkMaterializer {
         double kSpecial;
         String crossingType;
 
-        boolean sameParameters(int dn, LayingMethod laying, double kSpecial, double flow) {
-            return this.dn == dn && this.laying == laying
-                    && Math.abs(this.kSpecial - kSpecial) < 1e-9
-                    && Math.abs(this.flow - flow) < 1e-9;
+        boolean sameParameters(LayingMethod laying, double kSpecial) {
+            return this.laying == laying && Math.abs(this.kSpecial - kSpecial) < 1e-9;
         }
     }
 
-    /** Состояние отсчёта предельной длины вдоль непрерывной части одного ДУ. */
-    @Value
-    private static class RunState {
-        int dn;
-        double accumulated;
-    }
-
     /**
-     * @param rootNodeId  идентификатор узла в точке врезки: существующая камера,
-     *                    в которую выполняется врезка, либо новая камера
+     * @param rootNodeId  идентификатор узла в месте присоединения: существующая камера,
+     *                    к которой примыкает новая сеть, либо новая камера
      * @param terminalIds идентификатор выходного узла по ID перспективного ОКС —
      *                    точка подключения из входных данных
      */
@@ -131,52 +179,81 @@ public class NetworkMaterializer {
                                     String rootNodeId,
                                     Map<String, String> terminalIds,
                                     IdSequence ids) {
-        Map<Integer, Double> flows = tree.subtreeFlows();
-        List<NewSegment> segments = new ArrayList<>();
-        List<NewChamberResult> chambers = new ArrayList<>();
-        List<TechnicalNodeResult> technicalNodes = new ArrayList<>();
-        List<String> overCapacity = new ArrayList<>();
-        Map<Integer, String> nodeIds = new LinkedHashMap<>();
-        Map<String, Integer> chamberMaxDn = new LinkedHashMap<>();
-        Map<String, Set<Integer>> chamberAdjacent = new LinkedHashMap<>();
+        return materialize(tree, graph, field, variantId, rootNodeId, terminalIds, ids,
+                (from, to) -> false);
+    }
 
-        nodeIds.put(tree.getRoot(), rootNodeId);
+    /**
+     * @param blocked дополнительный запрет поверх поля препятствий: пользовательские
+     *                запретные зоны и уже принятые части сети этого же варианта.
+     *                Приведение угла поворота обязано их учитывать: сглаживающая дуга
+     *                уходит в сторону от исходной вершины и без этой проверки могла бы
+     *                зайти в зону, через которую трассе нельзя.
+     */
+    public Materialized materialize(RouteTree tree,
+                                    RoutingGraph graph,
+                                    ObstacleField field,
+                                    String variantId,
+                                    String rootNodeId,
+                                    Map<String, String> terminalIds,
+                                    IdSequence ids,
+                                    TurnLimiter.Passability blocked) {
+        Map<Integer, Double> flows = tree.subtreeFlows();
+        List<String> overCapacity = new ArrayList<>();
+
+        // --- разбор дерева на перегоны ----------------------------------------------------
+        List<Stretch> stretches = buildStretches(tree, graph, flows);
+        if (stretches.isEmpty()) {
+            return new Materialized(List.of(), List.of(), List.of(), 0,
+                    flows.getOrDefault(tree.getRoot(), 0d), List.of(), Map.of(), 0);
+        }
+
+        assignDiameters(stretches, tree, overCapacity);
 
         // --- идентификаторы структурных узлов --------------------------------------------
-        for (int node : tree.preOrder()) {
-            if (node == tree.getRoot()) {
+        Map<Integer, String> nodeIds = new LinkedHashMap<>();
+        nodeIds.put(tree.getRoot(), rootNodeId);
+        for (Stretch st : stretches) {
+            int end = st.endNode();
+            if (nodeIds.containsKey(end)) {
                 continue;
             }
-            String oksId = tree.getTerminalOks().get(node);
+            String oksId = tree.getTerminalOks().get(end);
             if (oksId != null) {
-                nodeIds.put(node, terminalIds.getOrDefault(oksId, oksId));
-            } else if (tree.isBranch(node)) {
-                nodeIds.put(node, ids.nextChamber());
+                nodeIds.put(end, terminalIds.getOrDefault(oksId, oksId));
+            } else {
+                // Не терминал, а значит развилка: раздел 2.1 ТП разрешает разветвление
+                // только в тепловой камере.
+                nodeIds.put(end, ids.nextChamber());
             }
         }
 
-        int rootDn = 0;
-        double rootFlow = flows.getOrDefault(tree.getRoot(), 0d);
+        // --- участки, технические узлы -----------------------------------------------------
+        List<NewSegment> segments = new ArrayList<>();
+        List<TechnicalNodeResult> technicalNodes = new ArrayList<>();
+        Map<String, Set<Integer>> chamberAdjacent = new LinkedHashMap<>();
 
-        // --- обход дерева от врезки -------------------------------------------------------
-        for (int child : tree.childrenOf(tree.getRoot())) {
-            RunState run = initialRun(flows.get(child), overCapacity, tree, child);
-            rootDn = Math.max(rootDn, run.getDn());
-            OpenSegment open = newOpen(rootNodeId,
-                    tree.locationOf(graph, tree.getRoot()), flows.get(child));
-            descend(tree, graph, field, child, open, run, flows, nodeIds, ids, variantId,
-                    segments, technicalNodes, overCapacity, chamberAdjacent);
+        int sharpTurns = 0;
+        for (Stretch st : stretches) {
+            sharpTurns += emitStretch(st, tree, graph, field, variantId, nodeIds, ids,
+                    segments, technicalNodes, chamberAdjacent, blocked);
+        }
+        if (sharpTurns > 0) {
+            log.warn("Поворотов круче 90° осталось {}: предел раздела 2.1 ТП по ним "
+                    + "не выдержан", sharpTurns);
         }
 
-        // --- камеры на развилках ----------------------------------------------------------
+        // --- камеры на развилках ------------------------------------------------------------
+        List<NewChamberResult> chambers = new ArrayList<>();
+        Map<String, Integer> chamberMaxDn = new LinkedHashMap<>();
         for (Map.Entry<Integer, String> e : nodeIds.entrySet()) {
             int node = e.getKey();
-            if (node == tree.getRoot() || !tree.isBranch(node)) {
+            if (node == tree.getRoot() || !tree.isBranch(node)
+                    || tree.getTerminalOks().containsKey(node)) {
                 continue;
             }
             String chamberId = e.getValue();
-            Set<Integer> adjacent = chamberAdjacent.getOrDefault(chamberId, Set.of());
-            int maxDn = adjacent.stream().mapToInt(Integer::intValue).max().orElse(0);
+            int maxDn = maxAdjacent(chamberAdjacent, chamberId);
             chamberMaxDn.put(chamberId, maxDn);
             chambers.add(NewChamberResult.builder()
                     .id(chamberId)
@@ -187,128 +264,299 @@ public class NetworkMaterializer {
                     .cost(catalog.chamberCost(maxDn))
                     .build());
         }
-        chamberMaxDn.put(rootNodeId,
-                chamberAdjacent.getOrDefault(rootNodeId, Set.of()).stream()
-                        .mapToInt(Integer::intValue).max().orElse(rootDn));
 
-        return new Materialized(segments, chambers, technicalNodes, rootDn, rootFlow,
-                overCapacity, chamberMaxDn);
+        int rootDn = 0;
+        for (Stretch st : stretches) {
+            if (st.parent < 0) {
+                rootDn = Math.max(rootDn, st.dn);
+            }
+        }
+        chamberMaxDn.put(rootNodeId, Math.max(rootDn, maxAdjacent(chamberAdjacent, rootNodeId)));
+
+        return new Materialized(segments, chambers, technicalNodes, rootDn,
+                flows.getOrDefault(tree.getRoot(), 0d), overCapacity, chamberMaxDn,
+                sharpTurns);
     }
 
     // =================================================================================
+    //  Разбор дерева на перегоны
+    // =================================================================================
 
-    private void descend(RouteTree tree,
-                         RoutingGraph graph,
-                         ObstacleField field,
-                         int node,
-                         OpenSegment open,
-                         RunState run,
-                         Map<Integer, Double> flows,
-                         Map<Integer, String> nodeIds,
-                         IdSequence ids,
-                         String variantId,
-                         List<NewSegment> segments,
-                         List<TechnicalNodeResult> technicalNodes,
-                         List<String> overCapacity,
-                         Map<String, Set<Integer>> chamberAdjacent) {
-        int parent = tree.getParent().get(node);
-        Coordinate from = tree.locationOf(graph, parent);
-        Coordinate to = tree.locationOf(graph, node);
-        double flow = flows.getOrDefault(node, 0d);
-
-        RunState afterEdge = emitEdge(field, from, to, flow, run, open, ids, variantId,
-                segments, technicalNodes, chamberAdjacent, nodeIds, parent);
-
-        String structuralId = nodeIds.get(node);
-        boolean structural = structuralId != null;
-
-        if (structural) {
-            closeSegment(open, to, structuralId, variantId, segments, chamberAdjacent, ids);
-            for (int child : tree.childrenOf(node)) {
-                double childFlow = flows.getOrDefault(child, 0d);
-                RunState childRun = adjustRun(afterEdge, childFlow, overCapacity, tree, child);
-                OpenSegment childOpen = newOpen(structuralId, to, childFlow);
-                descend(tree, graph, field, child, childOpen, childRun, flows, nodeIds, ids,
-                        variantId, segments, technicalNodes, overCapacity, chamberAdjacent);
-            }
-        } else {
-            List<Integer> kids = tree.childrenOf(node);
-            if (kids.isEmpty()) {
-                // Лист без идентификатора структурного узла возникнуть не должен:
-                // все листья — терминалы. Если возник, закрываем техническим узлом,
-                // чтобы участок не остался без конечного узла в выгрузке.
-                String id = ids.nextNode();
-                technicalNodes.add(technicalNode(id, variantId, to, "конец ветви"));
-                closeSegment(open, to, id, variantId, segments, chamberAdjacent, ids);
-                return;
-            }
-            descend(tree, graph, field, kids.get(0), open, afterEdge, flows, nodeIds, ids,
-                    variantId, segments, technicalNodes, overCapacity, chamberAdjacent);
+    private List<Stretch> buildStretches(RouteTree tree, RoutingGraph graph,
+                                         Map<Integer, Double> flows) {
+        List<Stretch> stretches = new ArrayList<>();
+        // {структурный узел, первый узел перегона, индекс родительского перегона}
+        Deque<int[]> pending = new ArrayDeque<>();
+        for (int child : tree.childrenOf(tree.getRoot())) {
+            pending.push(new int[]{tree.getRoot(), child, -1});
         }
+
+        while (!pending.isEmpty()) {
+            int[] task = pending.pop();
+            int from = task[0];
+            int first = task[1];
+            int parentIndex = task[2];
+
+            Stretch st = new Stretch(parentIndex);
+            st.nodes.add(from);
+            int current = first;
+            while (true) {
+                st.nodes.add(current);
+                if (isStructural(tree, current)) {
+                    break;
+                }
+                List<Integer> kids = tree.childrenOf(current);
+                if (kids.isEmpty()) {
+                    break;
+                }
+                current = kids.get(0);
+            }
+
+            st.flow = flows.getOrDefault(first, 0d);
+            st.length = pathLength(tree, graph, st.nodes);
+
+            int index = stretches.size();
+            stretches.add(st);
+            if (parentIndex >= 0) {
+                stretches.get(parentIndex).children.add(index);
+            }
+
+            for (int kid : tree.childrenOf(current)) {
+                pending.push(new int[]{current, kid, index});
+            }
+        }
+        return stretches;
     }
 
     /**
-     * Разбивает одно ребро дерева на атомарные части по смене условного диаметра
-     * (предельная длина) и по границам специальных проходов, дописывая их в открытый
-     * участок и закрывая его там, где меняются расчётные параметры.
+     * Узел меняет расчётный расход: развилка или точка подключения. На таком узле
+     * перегон заканчивается, и в выгрузке он становится концом участка.
      */
-    private RunState emitEdge(ObstacleField field,
-                              Coordinate from,
-                              Coordinate to,
-                              double flow,
-                              RunState run,
-                              OpenSegment open,
-                              IdSequence ids,
-                              String variantId,
-                              List<NewSegment> segments,
-                              List<TechnicalNodeResult> technicalNodes,
-                              Map<String, Set<Integer>> chamberAdjacent,
-                              Map<Integer, String> nodeIds,
-                              int parentNode) {
+    private static boolean isStructural(RouteTree tree, int node) {
+        return tree.isBranch(node) || tree.getTerminalOks().containsKey(node);
+    }
+
+    private static double pathLength(RouteTree tree, RoutingGraph graph, List<Integer> nodes) {
+        double sum = 0;
+        for (int i = 0; i + 1 < nodes.size(); i++) {
+            sum += tree.locationOf(graph, nodes.get(i))
+                    .distance(tree.locationOf(graph, nodes.get(i + 1)));
+        }
+        return sum;
+    }
+
+    // =================================================================================
+    //  Назначение условных диаметров
+    // =================================================================================
+
+    private void assignDiameters(List<Stretch> stretches, RouteTree tree,
+                                 List<String> overCapacity) {
+        for (Stretch st : stretches) {
+            st.dn = catalog.selectForFlow(st.flow)
+                    .map(DiameterRow::getDn)
+                    .orElseGet(() -> {
+                        collectTerminals(stretches, st, tree, overCapacity);
+                        return catalog.largest().getDn();
+                    });
+        }
+
+        int pass = 0;
+        while (pass++ < MAX_DIAMETER_PASSES) {
+            boolean changed = enforceMonotonicity(stretches);
+            if (!changed) {
+                changed = raiseOverlongRun(stretches);
+            }
+            if (!changed) {
+                return;
+            }
+        }
+        log.warn("Назначение условных диаметров не стабилизировалось за {} проходов; "
+                + "оставлены последние значения", MAX_DIAMETER_PASSES);
+    }
+
+    /**
+     * Раздел 2.3 ТП: по направлению от точки подключения к месту присоединения условный
+     * диаметр не должен уменьшаться. Дочерние перегоны созданы позже родительских,
+     * поэтому обход с конца списка гарантированно идёт от точек подключения к месту
+     * присоединения.
+     */
+    private boolean enforceMonotonicity(List<Stretch> stretches) {
+        boolean changed = false;
+        for (int i = stretches.size() - 1; i >= 0; i--) {
+            Stretch st = stretches.get(i);
+            for (int childIndex : st.children) {
+                int childDn = stretches.get(childIndex).dn;
+                if (childDn > st.dn) {
+                    st.dn = childDn;
+                    changed = true;
+                }
+            }
+        }
+        return changed;
+    }
+
+    /**
+     * Находит первый непрерывный участок одного ДУ, который не укладывается в предельную
+     * длину, и повышает диаметр этого участка целиком. Целиком — потому что менять ДУ
+     * только для начала нового отсчёта приложение запрещает прямо.
+     * <p>
+     * После повышения границы непрерывных участков меняются, поэтому исправляется по
+     * одному нарушению за проход, а поиск начинается заново.
+     */
+    private boolean raiseOverlongRun(List<Stretch> stretches) {
+        for (int i = 0; i < stretches.size(); i++) {
+            if (!stretches.get(i).children.isEmpty()) {
+                continue;               // предел проверяется по путям до точек подключения
+            }
+            List<Stretch> path = pathFromRoot(stretches, i);
+            int from = 0;
+            while (from < path.size()) {
+                int dn = path.get(from).dn;
+                int to = from;
+                double length = 0;
+                while (to < path.size() && path.get(to).dn == dn) {
+                    length += path.get(to).length;
+                    to++;
+                }
+                if (length > catalog.maxRunLength(dn) + 1e-6) {
+                    int upgraded = nextDnUp(dn);
+                    if (upgraded == dn) {
+                        log.warn("Непрерывный участок ДУ {} длиной {} м превышает предельную "
+                                        + "длину {} м, а повышать диаметр дальше нечем",
+                                dn, Math.round(length), Math.round(catalog.maxRunLength(dn)));
+                    } else {
+                        for (int k = from; k < to; k++) {
+                            path.get(k).dn = upgraded;
+                        }
+                        return true;
+                    }
+                }
+                from = to;
+            }
+        }
+        return false;
+    }
+
+    /** Перегоны от места присоединения до указанного перегона включительно. */
+    private static List<Stretch> pathFromRoot(List<Stretch> stretches, int index) {
+        List<Stretch> reversed = new ArrayList<>();
+        for (int cursor = index; cursor >= 0; cursor = stretches.get(cursor).parent) {
+            reversed.add(stretches.get(cursor));
+        }
+        List<Stretch> path = new ArrayList<>(reversed.size());
+        for (int i = reversed.size() - 1; i >= 0; i--) {
+            path.add(reversed.get(i));
+        }
+        return path;
+    }
+
+    /** ОКС в поддереве перегона — чтобы сказать, чей расход не покрывается справочником. */
+    private static void collectTerminals(List<Stretch> stretches, Stretch st,
+                                         RouteTree tree, List<String> out) {
+        Deque<Stretch> queue = new ArrayDeque<>();
+        queue.add(st);
+        while (!queue.isEmpty()) {
+            Stretch current = queue.poll();
+            String oks = tree.getTerminalOks().get(current.endNode());
+            if (oks != null && !out.contains(oks)) {
+                out.add(oks);
+            }
+            for (int childIndex : current.children) {
+                queue.add(stretches.get(childIndex));
+            }
+        }
+    }
+
+    private int nextDnUp(int dn) {
+        for (DiameterRow row : catalog.diameters()) {
+            if (row.getDn() > dn) {
+                return row.getDn();
+            }
+        }
+        return dn;
+    }
+
+    // =================================================================================
+    //  Выпуск участков
+    // =================================================================================
+
+    /**
+     * Пишет участки одного перегона. Диаметр и расход внутри перегона постоянны,
+     * поэтому линия делится только по границам специальных проходов.
+     *
+     * @return сколько поворотов круче 90° осталось на этом перегоне
+     */
+    private int emitStretch(Stretch st,
+                            RouteTree tree,
+                            RoutingGraph graph,
+                            ObstacleField field,
+                            String variantId,
+                            Map<Integer, String> nodeIds,
+                            IdSequence ids,
+                            List<NewSegment> segments,
+                            List<TechnicalNodeResult> technicalNodes,
+                            Map<String, Set<Integer>> chamberAdjacent,
+                            TurnLimiter.Passability blocked) {
+        String startNodeId = nodeIds.get(st.startNode());
+        String endNodeId = nodeIds.get(st.endNode());
+        if (startNodeId == null || endNodeId == null) {
+            log.warn("Перегон без идентификатора структурного узла пропущен: {} → {}",
+                    st.startNode(), st.endNode());
+            return 0;
+        }
+
+        // Раздел 2.1 ТП: поворот не круче 90°. Правка делается по вершинам нитки,
+        // до деления на участки: делить надо уже приведённую геометрию.
+        List<Coordinate> vertices = new ArrayList<>(st.nodes.size());
+        for (int node : st.nodes) {
+            vertices.add(tree.locationOf(graph, node));
+        }
+        String exemptOks = tree.getTerminalOks().get(st.endNode());
+        TurnLimiter.Result limited = turnLimiter.limit(vertices,
+                (from, to) -> field.isPassable(from, to, st.dn, exemptOks)
+                        && !blocked.test(from, to));
+        List<Coordinate> path = limited.getPath();
+
+        OpenSegment open = new OpenSegment();
+        open.startNodeId = startNodeId;
+        open.flow = st.flow;
+        open.dn = st.dn;
+
+        for (int i = 0; i + 1 < path.size(); i++) {
+            emitEdge(field, path.get(i), path.get(i + 1), st, open, ids, variantId,
+                    segments, technicalNodes, chamberAdjacent);
+        }
+
+        closeSegment(open, path.get(path.size() - 1), endNodeId, variantId,
+                segments, chamberAdjacent, ids);
+        return limited.getUnresolved();
+    }
+
+    /**
+     * Делит одно ребро по границам специальных проходов, дописывая части в открытый
+     * участок и закрывая его там, где меняется способ прокладки или коэффициент.
+     */
+    private void emitEdge(ObstacleField field,
+                          Coordinate from,
+                          Coordinate to,
+                          Stretch st,
+                          OpenSegment open,
+                          IdSequence ids,
+                          String variantId,
+                          List<NewSegment> segments,
+                          List<TechnicalNodeResult> technicalNodes,
+                          Map<String, Set<Integer>> chamberAdjacent) {
         double length = from.distance(to);
         if (length <= 0) {
-            return run;
+            return;
         }
 
-        // 1. Части по условному диаметру с учётом предельной длины.
-        List<double[]> dnPieces = new ArrayList<>();   // {fromLen, toLen, dn}
-        RunState current = run;
-        double pos = 0;
-        while (pos < length - 1e-9) {
-            double capacityLeft = catalog.maxRunLength(current.getDn()) - current.getAccumulated();
-            if (capacityLeft <= 1e-9) {
-                int upgraded = nextDnUp(current.getDn());
-                if (upgraded == current.getDn()) {
-                    // Наибольший ДУ справочника исчерпан: дальше повышать нечем.
-                    // Оставшаяся длина проходит на нём, ограничение помечается в отчёте.
-                    dnPieces.add(new double[]{pos, length, current.getDn()});
-                    current = new RunState(current.getDn(),
-                            current.getAccumulated() + (length - pos));
-                    pos = length;
-                    break;
-                }
-                current = new RunState(upgraded, 0);
-                continue;
-            }
-            double take = Math.min(length - pos, capacityLeft);
-            dnPieces.add(new double[]{pos, pos + take, current.getDn()});
-            current = new RunState(current.getDn(), current.getAccumulated() + take);
-            pos += take;
-        }
-
-        // 2. Границы специальных проходов.
         List<ObstacleField.SpecialInterval> specials =
-                field.specialIntervals(from, to, dnPieces.isEmpty()
-                        ? run.getDn() : (int) dnPieces.get(0)[2]);
+                field.specialIntervals(from, to, st.dn);
 
-        // 3. Общий набор точек деления.
         TreeSet<Double> breaks = new TreeSet<>();
         breaks.add(0d);
         breaks.add(length);
-        for (double[] piece : dnPieces) {
-            breaks.add(piece[0]);
-            breaks.add(piece[1]);
-        }
         for (ObstacleField.SpecialInterval si : specials) {
             breaks.add(Math.max(0, si.getFromFraction() * length));
             breaks.add(Math.min(length, si.getToFraction() * length));
@@ -322,7 +570,6 @@ public class NetworkMaterializer {
                 continue;
             }
             double mid = (a + b) / 2;
-            int dn = dnAt(dnPieces, mid, run.getDn());
             ObstacleField.SpecialInterval si = specialAt(specials, mid / length);
             LayingMethod laying = si == null ? LayingMethod.BASE : LayingMethod.SPECIAL;
             double k = si == null ? 1.0 : si.getKSpecial();
@@ -333,45 +580,27 @@ public class NetworkMaterializer {
 
             if (open.coords.isEmpty()) {
                 open.coords.add(pa);
-                open.flow = flow;
-                open.dn = dn;
                 open.laying = laying;
                 open.kSpecial = k;
                 open.crossingType = type;
-            } else if (!open.sameParameters(dn, laying, k, flow)) {
-                // Раздел 8.1 ТП: у одного участка один набор параметров. Смена ДУ,
-                // способа прокладки или коэффициента стоимости делит линию,
-                // и в точке деления появляется технический узел.
+            } else if (!open.sameParameters(laying, k)) {
+                // Раздел 4 ТП: на границах специального прохода участок делится, и если
+                // граница не совпадает с камерой или точкой подключения, в ней появляется
+                // технический узел.
                 String nodeId = ids.nextNode();
                 technicalNodes.add(technicalNode(nodeId, variantId, pa,
-                        reasonFor(open, dn, laying, k)));
+                        laying == LayingMethod.SPECIAL
+                                ? "начало специального прохода"
+                                : "конец специального прохода"));
                 closeSegment(open, pa, nodeId, variantId, segments, chamberAdjacent, ids);
                 open.startNodeId = nodeId;
                 open.coords.add(pa);
-                open.flow = flow;
-                open.dn = dn;
                 open.laying = laying;
                 open.kSpecial = k;
                 open.crossingType = type;
             }
             open.coords.add(pb);
         }
-        return current;
-    }
-
-    private String reasonFor(OpenSegment open, int dn, LayingMethod laying, double k) {
-        if (open.dn != dn) {
-            return String.format("смена условного диаметра %d → %d мм", open.dn, dn);
-        }
-        if (open.laying != laying) {
-            return laying == LayingMethod.SPECIAL
-                    ? "начало специального прохода" : "конец специального прохода";
-        }
-        if (Math.abs(open.kSpecial - k) > 1e-9) {
-            return String.format("смена коэффициента специального прохода %.2f → %.2f",
-                    open.kSpecial, k);
-        }
-        return "смена расчётных параметров участка";
     }
 
     private void closeSegment(OpenSegment open, Coordinate at, String endNodeId,
@@ -417,11 +646,9 @@ public class NetworkMaterializer {
         open.coords.clear();
     }
 
-    private OpenSegment newOpen(String startNodeId, Coordinate start, double flow) {
-        OpenSegment open = new OpenSegment();
-        open.startNodeId = startNodeId;
-        open.flow = flow;
-        return open;
+    private static int maxAdjacent(Map<String, Set<Integer>> adjacent, String nodeId) {
+        return adjacent.getOrDefault(nodeId, Set.of()).stream()
+                .mapToInt(Integer::intValue).max().orElse(0);
     }
 
     private TechnicalNodeResult technicalNode(String id, String variantId,
@@ -432,55 +659,6 @@ public class NetworkMaterializer {
                 .location(Geo.point(at))
                 .reason(reason)
                 .build();
-    }
-
-    private RunState initialRun(double flow, List<String> overCapacity,
-                                RouteTree tree, int node) {
-        return new RunState(diameterFor(flow, overCapacity, tree, node), 0);
-    }
-
-    /**
-     * Условный диаметр для нового расхода. Если он ниже текущего в отсчёте — начинается
-     * новый отсчёт предельной длины, потому что диаметр изменился (раздел 3 ТП).
-     */
-    private RunState adjustRun(RunState run, double flow, List<String> overCapacity,
-                               RouteTree tree, int node) {
-        int dn = diameterFor(flow, overCapacity, tree, node);
-        if (dn == run.getDn()) {
-            return run;
-        }
-        return new RunState(dn, 0);
-    }
-
-    private int diameterFor(double flow, List<String> overCapacity, RouteTree tree, int node) {
-        return catalog.selectForFlow(flow)
-                .map(DiameterRow::getDn)
-                .orElseGet(() -> {
-                    String oks = tree.getTerminalOks().get(node);
-                    if (oks != null) {
-                        overCapacity.add(oks);
-                    }
-                    return catalog.largest().getDn();
-                });
-    }
-
-    private int nextDnUp(int dn) {
-        List<DiameterRow> all = catalog.diameters();
-        for (DiameterRow row : all) {
-            if (row.getDn() > dn) {
-                return row.getDn();
-            }
-        }
-        return dn;
-    }
-
-    private static int dnAt(List<double[]> pieces, double pos, double fallback) {
-        for (double[] piece : pieces) {
-            if (pos >= piece[0] - 1e-9 && pos <= piece[1] + 1e-9) {
-                return (int) piece[2];
-            }
-        }
-        return (int) fallback;
     }
 
     private static ObstacleField.SpecialInterval specialAt(

@@ -29,12 +29,15 @@ import java.util.Set;
 import java.util.stream.Collectors;
 
 /**
- * Дополнительная задача: трассировка тепловой сети с учётом глубины.
+ * Дополнительный режим: трассировка тепловой сети с учётом глубины.
  * <p>
- * Правила приложения к кейсу, реализованные здесь:
+ * Раздел 5 приложения в редакции от 18.09 объявляет режим необязательным и ранжирует
+ * его отдельно от двумерного: результаты двух режимов в одно ранжирование не сводятся.
+ * Правила, реализованные здесь:
  * <ul>
- *   <li>обычная глубина 3,0 м до верха расчётного габарита, минимальная 0,7 м,
- *       подбор с шагом 0,5 м;</li>
+ *   <li>обычная глубина 3,0 м до верха расчётного габарита, минимальная 0,7 м;
+ *       дискретного шага подбора приложение больше не задаёт, и глубина берётся ровно
+ *       та, которая нужна по просвету;</li>
  *   <li>в месте пересечения новая сеть проходит выше или ниже существующей
  *       коммуникации с соблюдением вертикального просвета; если справочник допускает
  *       оба варианта, выбирается тот, что дешевле;</li>
@@ -74,7 +77,7 @@ public class DepthPlanner {
 
     /**
      * Объект, под которым новая сеть обязана идти не выше заданной глубины:
-     * дорога, трамвайные пути (таблица 5.1, {@code minTopBelowSurface}).
+     * дорога, трамвайные пути (таблица 2, {@code minTopBelowSurface}).
      */
     @Value
     private static class SurfaceLimit {
@@ -338,7 +341,7 @@ public class DepthPlanner {
      * выше заданной отметки. Обычная глубина 3,0 м это перекрывает, но проход поверх
      * чужой коммуникации поднимает трассу — и вот там правило начинает работать.
      * <p>
-     * На значениях таблицы 5.1 (1,0 м под дорогой, 1,2 м под путями) ограничение
+     * На значениях таблицы 2 (1,0 м под дорогой, 1,2 м под путями) ограничение
      * не срабатывает: самый высокий проход поверх коммуникации даёт около 2,0 м.
      * Это защита от другого набора справочных данных, а не действующее ограничение
      * на конкурсном наборе, и проверить её можно только подменой справочника.
@@ -391,7 +394,7 @@ public class DepthPlanner {
                 continue;
             }
             // Габарит существующей тепловой сети берётся по её условному диаметру
-            // (таблица 4.2), у прочих коммуникаций он задан в таблице 4.3 напрямую.
+            // (таблица 1), у прочих коммуникаций он задан в разделе 4 напрямую.
             double height = row.getHeight() != null
                     ? row.getHeight()
                     : catalog.pairHeight(restriction.getDiameter() == null
@@ -472,7 +475,7 @@ public class DepthPlanner {
         if (utility.getRule() == VerticalRule.ABOVE_OR_BELOW) {
             // Сверху: низ новой сети выше верха коммуникации на требуемый просвет.
             double above = utility.getDepthToTop() - utility.getMinClearance() - newHeight;
-            double aboveSnapped = snapDown(above, params);
+            double aboveSnapped = snapDown(above);
             if (aboveSnapped >= minDepth) {
                 double clearance = utility.getDepthToTop() - (aboveSnapped + newHeight);
                 options.add(new Choice(UtilityCrossing.Passage.ABOVE, aboveSnapped,
@@ -482,7 +485,7 @@ public class DepthPlanner {
             // Снизу: верх новой сети ниже низа коммуникации на требуемый просвет.
             double below = utility.getDepthToTop() + utility.getHeight()
                     + utility.getMinClearance();
-            double belowSnapped = snapUp(below, params);
+            double belowSnapped = snapUp(below);
             if (belowSnapped <= params.getMaxDepth()) {
                 double clearance = belowSnapped
                         - (utility.getDepthToTop() + utility.getHeight());
@@ -574,7 +577,7 @@ public class DepthPlanner {
     /**
      * Делит участок на части в точках смены уклона и на отметке обычной глубины.
      * Для каждой части считается коэффициент по глубине: на горизонтальной части —
-     * по её глубине, на наклонной — среднее коэффициентов концов (раздел 6.1 ТП).
+     * по её глубине, на наклонной — среднее коэффициентов концов (раздел 5 ТП).
      */
     private List<NewSegment> split(NewSegment segment, DepthProfile profile,
                                    ReferenceProperties.Depth params) {
@@ -669,14 +672,23 @@ public class DepthPlanner {
         return indexed.project(point);
     }
 
-    /** Округление вниз до шага подбора глубины. */
-    private double snapDown(double depth, ReferenceProperties.Depth params) {
-        return Math.floor(depth / params.getStep()) * params.getStep();
+    /**
+     * Округление вниз до сантиметра.
+     * <p>
+     * Первая редакция приложения требовала подбирать глубину шагом 0,5 м, и глубина
+     * округлялась до сетки. В редакции от 18.09 дискретный шаг не задан, а {@code Kгл}
+     * линеен, поэтому сетка стала только дорожать решение: округление вверх при проходе
+     * снизу забирало до половины метра лишнего заглубления. Теперь берётся ровно та
+     * глубина, которая нужна по просвету, а до сантиметра значение доводится лишь
+     * затем, чтобы в выгрузке не появлялось шума вроде 2,3999999997.
+     */
+    private double snapDown(double depth) {
+        return Math.floor(depth * 100d) / 100d;
     }
 
-    /** Округление вверх до шага подбора глубины. */
-    private double snapUp(double depth, ReferenceProperties.Depth params) {
-        return Math.ceil(depth / params.getStep()) * params.getStep();
+    /** Округление вверх до сантиметра — та же причина, что и у округления вниз. */
+    private double snapUp(double depth) {
+        return Math.ceil(depth * 100d) / 100d;
     }
 
     /** Пересечения ближе метра считаются одним: отдельный манёвр между ними не вместить. */

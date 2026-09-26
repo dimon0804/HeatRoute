@@ -63,7 +63,7 @@ public class ReferenceProperties {
     /** Таблица 5.1: правила по типам пространственных ограничений. */
     private Map<String, RestrictionRow> restrictions = new LinkedHashMap<>();
 
-    /** Сопоставление нестандартных написаний restriction_type с типами таблицы 5.1. */
+    /** Сопоставление нестандартных написаний restriction_type с типами таблицы 2. */
     private Map<String, String> restrictionAliases = new LinkedHashMap<>();
 
     /** Правило для типа ограничения, отсутствующего в справочнике. */
@@ -71,19 +71,17 @@ public class ReferenceProperties {
 
     // ---------------------------------------------------------------------------------
 
-    /** Строка таблиц 4.1 и 4.2 по одному условному диаметру. */
+    /** Строка таблицы 1 по одному условному диаметру. */
     @Data
     public static class DiameterRow {
         /** Условный диаметр, мм. */
         private int dn;
         /** Пропускная способность, т/ч. */
         private double capacityTph;
-        /** Предельная длина непрерывной части сети одного ДУ, м. */
+        /** Предельная длина непрерывного пути одного ДУ, м. */
         private double maxRunLength;
         /** Стоимость нового строительства, руб./м. */
         private double newCostPerM;
-        /** Стоимость реконструкции существующей сети, руб./м. */
-        private double reconCostPerM;
         /** Наружный диаметр оболочки, м. */
         private double casingOd;
         /** Просвет между оболочками, м. */
@@ -111,13 +109,20 @@ public class ReferenceProperties {
         private double lengthBase = 100d;
     }
 
-    /** Раздел 6: параметры трассировки с учётом глубины. */
+    /**
+     * Раздел 5: параметры трассировки с учётом глубины. Дискретного шага подбора
+     * в редакции приложения от 18.09 нет, поэтому его нет и здесь: глубина берётся
+     * ровно та, которая нужна по просвету.
+     */
     @Data
     public static class Depth {
         private double normalDepth = 3.0;
         private double minDepth = 0.7;
+        /**
+         * Верхняя граница поиска, м. Приложение максимальную глубину не ограничивает,
+         * это наш предел перебора: глубже манёвр перестаёт быть осмысленным.
+         */
         private double maxDepth = 6.0;
-        private double step = 0.5;
         private double freeDepthThreshold = 3.0;
         private double costPerExtraMeter = 0.10;
         private double maxSlope = 0.10;
@@ -125,18 +130,18 @@ public class ReferenceProperties {
         private double crossingFlatHalf = 2.0;
     }
 
-    /** Строка таблицы 4.3: условный габарит существующей коммуникации. */
+    /** Раздел 4: условный габарит существующей коммуникации. */
     @Data
     public static class UtilityRow {
-        /** Ширина габарита, м; {@code null} — берётся из таблицы 4.2 по ДУ объекта. */
+        /** Ширина габарита, м; {@code null} — берётся из таблицы 1 по ДУ объекта. */
         private Double width;
-        /** Высота габарита, м; {@code null} — берётся из таблицы 4.2 по ДУ объекта. */
+        /** Высота габарита, м; {@code null} — берётся из таблицы 1 по ДУ объекта. */
         private Double height;
         /** Глубина до верха габарита, м. */
         private double depthToTop;
     }
 
-    /** Строка таблицы 5.1: правило по типу пространственного ограничения. */
+    /** Строка таблицы 2: правило по типу пространственного ограничения. */
     @Data
     public static class RestrictionRow {
         private RestrictionRule rule = RestrictionRule.FORBIDDEN;

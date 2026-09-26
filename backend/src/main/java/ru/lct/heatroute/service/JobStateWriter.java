@@ -47,6 +47,13 @@ public class JobStateWriter {
     private final SceneMapper mapper;
     private final ObjectMapper json;
 
+    /**
+     * Отдельный сериализатор для атрибутов выходных объектов: пустые значения в нём
+     * сохраняются. Общая настройка сервиса выбрасывает {@code null} из ответов API,
+     * и это правильно для API, но для выгрузки — нет.
+     */
+    private final ObjectMapper exportJson;
+
     public JobStateWriter(CalculationJobRepository jobs,
                           VariantRepository variants,
                           VariantFeatureRepository variantFeatures,
@@ -59,6 +66,8 @@ public class JobStateWriter {
         this.features = features;
         this.mapper = mapper;
         this.json = json;
+        this.exportJson = json.copy()
+                .setSerializationInclusion(com.fasterxml.jackson.annotation.JsonInclude.Include.ALWAYS);
     }
 
     @Transactional(propagation = Propagation.REQUIRES_NEW)
@@ -90,12 +99,12 @@ public class JobStateWriter {
             entity.setFingerprint(variant.getStructureFingerprint());
             entity.setScore(variant.getSummary().getScore());
             entity.setCalculatedCost(variant.getSummary().getCalculatedCost());
-            entity.setTotalLength(variant.getSummary().getLength());
+            entity.setTotalLength(variant.getSummary().getNewNetworkLength());
             variants.save(entity);
 
             List<VariantFeatureEntity> batch = new ArrayList<>(BATCH_SIZE);
             int[] ordinal = {0};
-            features.forEach(variant, feature -> {
+            features.forEachWithDiagnostics(variant, feature -> {
                 VariantFeatureEntity row = new VariantFeatureEntity();
                 row.setVariant(entity);
                 row.setObjectType(feature.getObjectType());
@@ -128,6 +137,9 @@ public class JobStateWriter {
                     .graphEdges(plan.getGraphEdges())
                     .tieInCandidates(plan.getTieInCandidates())
                     .millis(duration.toMillis())
+                    .sharpTurns(plan.getSharpTurns())
+                    .depthUnresolved(plan.getDepthUnresolvedByVariant().values().stream()
+                            .mapToInt(java.util.List::size).sum())
                     .build()));
             jobs.save(job);
         });
@@ -144,9 +156,18 @@ public class JobStateWriter {
         });
     }
 
+    /**
+     * Сериализация атрибутов выходного объекта для хранения в базе.
+     * <p>
+     * Своя настройка, а не общая: сервис отдаёт API с {@code non_null}, чтобы в ответах
+     * не было пустых полей, — но состав атрибутов выгрузки задан приложением жёстко,
+     * и {@code depth_start} с {@code depth_end} в плоском расчёте обязаны присутствовать
+     * именно со значением {@code null}. С общей настройкой они пропадали при записи
+     * в базу и не доходили до выходного файла.
+     */
     private String write(Object value) {
         try {
-            return json.writeValueAsString(value);
+            return exportJson.writeValueAsString(value);
         } catch (Exception e) {
             throw new IllegalStateException("Не удалось сериализовать результат расчёта", e);
         }

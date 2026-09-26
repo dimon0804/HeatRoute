@@ -14,7 +14,7 @@ import java.util.Map;
 /**
  * Справочник технического приложения в том виде, в каком его применяет расчёт.
  * <p>
- * Ручка нужна не интерфейсу: она доказывает, что таблицы 4.1, 4.2, 5.1 и 8.2 —
+ * Ручка нужна не интерфейсу: она доказывает, что таблицы 1 и 2 вместе с разделом 3.2 —
  * это данные, а не константы в коде. Эксперт может открыть её и сверить значения
  * с приложением построчно, а при подмене справочника снаружи увидеть новые значения
  * без пересборки сервиса.
@@ -56,13 +56,13 @@ public class ReferenceController {
     }
 
     @GetMapping("/diameters")
-    @Operation(summary = "Ряд условных диаметров (таблицы 4.1 и 4.2)")
+    @Operation(summary = "Ряд условных диаметров (таблица 1)")
     public Object diameters() {
         return catalog.diameters();
     }
 
     @GetMapping("/restrictions")
-    @Operation(summary = "Правила по типам пространственных ограничений (таблица 5.1)")
+    @Operation(summary = "Правила по типам пространственных ограничений (таблица 2)")
     public Map<String, Object> restrictions() {
         Map<String, Object> out = new LinkedHashMap<>();
         out.put("rules", catalog.props().getRestrictions());

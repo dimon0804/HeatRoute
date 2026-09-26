@@ -4,7 +4,7 @@ import lombok.Builder;
 import lombok.Value;
 import org.locationtech.jts.geom.Point;
 
-/** Новая тепловая камера (раздел 10.4 ТП). */
+/** Новая тепловая камера (раздел 7.2 ТП). */
 @Value
 @Builder(toBuilder = true)
 public class NewChamberResult {

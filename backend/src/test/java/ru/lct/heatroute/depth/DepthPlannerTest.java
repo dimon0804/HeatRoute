@@ -102,7 +102,7 @@ class DepthPlannerTest {
     }
 
     @Test
-    @DisplayName("Глубина подобрана с шагом справочника и не выходит за границы")
+    @DisplayName("Глубина не выходит за границы справочника")
     void depthWithinLimits() throws Exception {
         prepare();
         ReferenceProperties.Depth params = catalog.props().getDepth();

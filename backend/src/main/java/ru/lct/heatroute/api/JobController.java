@@ -105,8 +105,9 @@ public class JobController {
     @GetMapping(value = "/{id}/statement.csv", produces = "text/csv; charset=UTF-8")
     @Operation(summary = "Ведомость объёмов работ",
             description = "Таблица для Excel: перечень новых участков с диаметром, длиной "
-                    + "и стоимостью, тепловые камеры, врезки, реконструкция, свод по условным "
-                    + "диаметрам и итог. Выгрузка GeoJSON адресована ГИС, а смету считают "
+                    + "и стоимостью, новые тепловые камеры, врезки в существующие камеры, "
+                    + "свод по условным диаметрам и итог. Выгрузка GeoJSON адресована ГИС, "
+                    + "а смету считают "
                     + "по этому документу. Без параметра берётся вариант, занявший первое место.")
     public ResponseEntity<StreamingResponseBody> statement(
             @PathVariable UUID id,

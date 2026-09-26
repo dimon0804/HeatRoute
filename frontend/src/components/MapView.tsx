@@ -237,14 +237,10 @@ export function MapView({
 
 /** Слои результата: идентификатор слоя и тип объекта, который он показывает. */
 const RESULT_LAYERS: { id: string; type: string }[] = [
-  { id: 'recon-line', type: 'heat_network_reconstruction' },
   { id: 'proposed-casing', type: 'heat_network' },
   { id: 'proposed-line', type: 'heat_network' },
-  { id: 'tie-in', type: 'tie_in' },
   { id: 'new-chamber', type: 'heat_chamber' },
-  { id: 'chamber-recon', type: 'heat_chamber_reconstruction' },
   { id: 'technical-node', type: 'technical_node' },
-  { id: 'depth-crossing', type: 'depth_crossing' },
 ]
 
 /** Показывать объекты только выбранного варианта; {@code null} — все сразу. */
@@ -273,7 +269,9 @@ function addSceneLayers(map: MapLibreMap) {
         'match',
         ['get', 'restriction_type'],
         'water', COLORS.water,
-        'railway', COLORS.tram,
+        // Железная дорога выделена отдельно: её пересечение запрещено,
+        // а трамвайные пути проходятся специальным проходом.
+        'railway', COLORS.railway,
         'tram_tracks', COLORS.tram,
         'road', COLORS.tram,
         COLORS.restriction,
@@ -343,22 +341,6 @@ function addSceneLayers(map: MapLibreMap) {
 }
 
 function addResultLayers(map: MapLibreMap) {
-  // Реконструкция рисуется под новой сетью: она идёт по существующей трассе,
-  // и перекрывать ею новые участки нельзя.
-  map.addLayer({
-    id: 'recon-line',
-    type: 'line',
-    source: SOURCE_IDS.result,
-    filter: ['==', ['get', 'object_type'], 'heat_network_reconstruction'],
-    layout: { 'line-cap': 'round' },
-    paint: {
-      'line-color': COLORS.reconstruction,
-      'line-width': 7,
-      'line-opacity': 0.75,
-      'line-dasharray': [1.5, 1],
-    },
-  })
-
   // Тёмная обводка под трассой: на плотной застройке она отделяет линию от фона.
   map.addLayer({
     id: 'proposed-casing',
@@ -387,19 +369,9 @@ function addResultLayers(map: MapLibreMap) {
     },
   })
 
-  map.addLayer({
-    id: 'tie-in',
-    type: 'circle',
-    source: SOURCE_IDS.result,
-    filter: ['==', ['get', 'object_type'], 'tie_in'],
-    paint: {
-      'circle-radius': 7,
-      'circle-color': COLORS.tieIn,
-      'circle-stroke-color': '#ffffff',
-      'circle-stroke-width': 2,
-    },
-  })
-
+  // Отдельного объекта места присоединения в выгрузке нет: новый участок либо
+  // заканчивается в существующей камере, либо в новой, поставленной в точке
+  // присоединения. Врезки учтены количеством и стоимостью в сводке варианта.
   map.addLayer({
     id: 'new-chamber',
     type: 'circle',
@@ -414,19 +386,6 @@ function addResultLayers(map: MapLibreMap) {
   })
 
   map.addLayer({
-    id: 'chamber-recon',
-    type: 'circle',
-    source: SOURCE_IDS.result,
-    filter: ['==', ['get', 'object_type'], 'heat_chamber_reconstruction'],
-    paint: {
-      'circle-radius': 9,
-      'circle-color': 'rgba(0,0,0,0)',
-      'circle-stroke-color': COLORS.chamberReconstruction,
-      'circle-stroke-width': 2.5,
-    },
-  })
-
-  map.addLayer({
     id: 'technical-node',
     type: 'circle',
     source: SOURCE_IDS.result,
@@ -436,21 +395,6 @@ function addResultLayers(map: MapLibreMap) {
       'circle-color': COLORS.technicalNode,
       'circle-stroke-color': '#0b1118',
       'circle-stroke-width': 1,
-    },
-  })
-
-  // Пересечения по глубине: дополнительная задача. Ромбовидная обводка отличает их
-  // от узлов сети — это не сооружение, а место, где трасса меняет глубину.
-  map.addLayer({
-    id: 'depth-crossing',
-    type: 'circle',
-    source: SOURCE_IDS.result,
-    filter: ['==', ['get', 'object_type'], 'depth_crossing'],
-    paint: {
-      'circle-radius': 6,
-      'circle-color': 'rgba(0,0,0,0)',
-      'circle-stroke-color': COLORS.depthCrossing,
-      'circle-stroke-width': 2,
     },
   })
 }
@@ -540,12 +484,8 @@ function addHighlightLayer(map: MapLibreMap) {
 function attachPopups(map: MapLibreMap, placing: { current: boolean }) {
   const clickable = [
     'proposed-line',
-    'recon-line',
-    'tie-in',
     'new-chamber',
-    'chamber-recon',
     'technical-node',
-    'depth-crossing',
     'existing-network',
     'existing-chamber',
     'oks-point',
@@ -592,35 +532,19 @@ function describe(props: Record<string, unknown>): string {
   if (props.address) add('Адрес', String(props.address))
   if (props.flow_tph != null) add('Расчётный расход', flow(Number(props.flow_tph)))
   if (props.diameter != null) add('Условный диаметр', `${props.diameter} мм`)
+  // Число примыкающих участков: по приложению к камере их не больше четырёх.
+  if (props.degree != null) add('Примыканий', `${props.degree} из 4`)
   if (props.length != null) add('Длина', meters(Number(props.length)))
   if (props.laying_method) {
     add('Способ прокладки',
       props.laying_method === 'special' ? 'Специальный проход' : 'Обычная прокладка')
   }
-  if (props.existing_diameter != null) add('Существующий ДУ', `${props.existing_diameter} мм`)
-  if (props.required_diameter != null) add('Требуемый ДУ', `${props.required_diameter} мм`)
-  if (props.existing_flow_tph != null) add('Существующий расход', flow(Number(props.existing_flow_tph)))
-  if (props.added_flow_tph != null) add('Дополнительный расход', flow(Number(props.added_flow_tph)))
-  if (props.calculated_flow_tph != null) add('Итоговый расход', flow(Number(props.calculated_flow_tph)))
-  if (props.existing_object_id) add('Существующий объект', String(props.existing_object_id))
   if (props.start_node_id) add('Начальный узел', String(props.start_node_id))
   if (props.end_node_id) add('Конечный узел', String(props.end_node_id))
+  // Вертикальное положение задано только глубинами концов участка: Z-координат
+  // в геометрии нет, в двумерном режиме глубины приходят пустыми.
   if (props.depth_start != null) add('Глубина в начале', `${props.depth_start} м`)
   if (props.depth_end != null) add('Глубина в конце', `${props.depth_end} м`)
-  if (props.utility_type) {
-    add('Пересекаемая коммуникация', RESTRICTION_LABELS[String(props.utility_type)]
-      ?? String(props.utility_type))
-  }
-  if (props.passage) {
-    add('Прохождение', props.passage === 'above' ? 'сверху' : 'снизу')
-  }
-  if (props.station != null) add('Положение на участке', `${props.station} м от начала`)
-  if (props.new_depth != null) add('Глубина новой сети', `${props.new_depth} м`)
-  if (props.utility_depth != null) add('Глубина коммуникации', `${props.utility_depth} м`)
-  if (props.actual_clearance != null) {
-    add('Вертикальный просвет',
-      `${props.actual_clearance} м при норме ${props.required_clearance} м`)
-  }
   if (props.cost != null) add('Стоимость', money(Number(props.cost)))
 
   return `<div class="hr-popup-body"><div class="hr-title">${title}</div>${rows.join('')}</div>`

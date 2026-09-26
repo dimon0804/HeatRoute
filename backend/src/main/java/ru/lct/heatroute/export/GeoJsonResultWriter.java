@@ -20,7 +20,7 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * Выгрузка результата в один совмещённый файл GeoJSON (раздел 10 ТП).
+ * Выгрузка результата в один совмещённый файл GeoJSON (раздел 7 ТП).
  * <p>
  * Запись потоковая: объекты уходят в выходной поток по одному, документ целиком
  * в памяти не собирается. Требование ТЗ — выгрузка до 500 МБ.
@@ -67,7 +67,7 @@ public class GeoJsonResultWriter {
             g.writeStartObject();
             g.writeStringField("type", "FeatureCollection");
 
-            // Геометрия выходного файла — в WGS 84, как требует раздел 10 ТП.
+            // Геометрия выходного файла — в WGS 84, как требует раздел 7 ТП.
             g.writeFieldName("crs");
             g.writeStartObject();
             g.writeStringField("type", "name");
@@ -132,11 +132,37 @@ public class GeoJsonResultWriter {
         } else if (value instanceof List) {
             g.writeArrayFieldStart(field);
             for (Object item : (List<?>) value) {
-                g.writeString(String.valueOf(item));
+                writeItem(g, item);
             }
             g.writeEndArray();
         } else {
             g.writeStringField(field, String.valueOf(value));
+        }
+    }
+
+    /**
+     * Элемент массива с сохранением типа.
+     * <p>
+     * Раздел 7.2 ТП про {@code unconnected_oks_ids}: «Тип каждого идентификатора
+     * сохраняется таким же, как во входных данных». Числовой идентификатор должен
+     * остаться числом, иначе ссылка на объект входного набора перестаёт совпадать
+     * с ним буквально.
+     */
+    private void writeItem(JsonGenerator g, Object item) throws IOException {
+        if (item == null) {
+            g.writeNull();
+        } else if (item instanceof Integer) {
+            g.writeNumber((Integer) item);
+        } else if (item instanceof Long) {
+            g.writeNumber((Long) item);
+        } else if (item instanceof Double) {
+            g.writeNumber((Double) item);
+        } else if (item instanceof Number) {
+            g.writeNumber(((Number) item).doubleValue());
+        } else if (item instanceof Boolean) {
+            g.writeBoolean((Boolean) item);
+        } else {
+            g.writeString(String.valueOf(item));
         }
     }
 
@@ -170,13 +196,19 @@ public class GeoJsonResultWriter {
         g.writeEndObject();
     }
 
+    /**
+     * Координаты пишутся плоскими, без третьего числа.
+     * <p>
+     * Раздел 5 ТП в редакции от 18.09: «Z-координаты в GeoJSON не требуются. Вертикальное
+     * положение задаётся атрибутами глубины в начале и конце участка». Внутри расчёта
+     * отметка на вершинах остаётся — по ней строится продольный профиль, — но в выгрузку
+     * она не идёт: сверять будут плановую геометрию, и лишнее число в координате
+     * только мешает.
+     */
     private void writeCoordinate(JsonGenerator g, Coordinate c) throws IOException {
         g.writeStartArray();
         g.writeNumber(c.x);
         g.writeNumber(c.y);
-        if (!Double.isNaN(c.getZ())) {
-            g.writeNumber(Math.round(c.getZ() * 1000d) / 1000d);
-        }
         g.writeEndArray();
     }
 }

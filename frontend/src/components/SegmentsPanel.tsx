@@ -1,7 +1,6 @@
 import { useMemo, useState } from 'react'
-import { flow, meters, money, RESTRICTION_LABELS } from '../lib/format'
+import { flow, meters, money } from '../lib/format'
 import { Badge, Empty, Section } from './ui'
-import { DepthCrossSection } from './DepthCrossSection'
 import { DepthProfile } from './DepthProfile'
 
 interface Props {
@@ -11,14 +10,21 @@ interface Props {
   onSelectFeature: (id: string | null) => void
 }
 
-type Tab = 'segments' | 'reconstruction' | 'depth'
+type Tab = 'segments' | 'chambers' | 'depth'
+
+/** Обычная глубина заложения, от которой считается отклонение профиля. */
+const NORMAL_DEPTH = 3.0
+/** Предельный уклон при смене глубины, м/м. */
+const MAX_SLOPE = 0.1
+/** Сколько линейных участков может примыкать к тепловой камере. */
+const MAX_CHAMBER_DEGREE = 4
 
 /**
- * Таблицы участков и реконструкции.
+ * Таблицы новой сети: участки, тепловые камеры и профиль по глубине.
  * <p>
- * Пункты 4 и 6 сценария демонстрации (раздел 4 ТЗ) требуют показать расходы,
- * условные диаметры и участки, которым нужно увеличение диаметра. Карта отвечает
- * на вопрос «где», таблица — на вопрос «сколько».
+ * Карта отвечает на вопрос «где», таблица — на вопрос «сколько». Расходы,
+ * условные диаметры, способ прокладки и стоимость собраны в одном месте,
+ * а щелчок по строке показывает объект на карте.
  */
 export function SegmentsPanel({
   result, activeVariant, selectedFeatureId, onSelectFeature,
@@ -27,7 +33,7 @@ export function SegmentsPanel({
 
   const rows = useMemo(() => {
     if (!result?.features) {
-      return { segments: [], reconstruction: [], depth: [], depthMode: false }
+      return { segments: [], chambers: [], depth: [], depthMode: false }
     }
     const match = (props: Record<string, unknown>) =>
       !activeVariant || props.variant_id === activeVariant
@@ -37,24 +43,35 @@ export function SegmentsPanel({
       .map((f) => f.properties as Record<string, unknown>)
       .sort((a, b) => Number(b.flow_tph) - Number(a.flow_tph))
 
-    const reconstruction = result.features
-      .filter((f) => f.properties?.object_type === 'heat_network_reconstruction' && match(f.properties ?? {}))
+    // Камеры по убыванию диаметра: первыми идут узлы магистрали, где примыканий
+    // больше всего и где предел в четыре участка ближе всего к исчерпанию.
+    const chambers = result.features
+      .filter((f) => f.properties?.object_type === 'heat_chamber' && match(f.properties ?? {}))
       .map((f) => f.properties as Record<string, unknown>)
-      .sort((a, b) => Number(b.calculated_flow_tph) - Number(a.calculated_flow_tph))
+      .sort((a, b) => Number(b.diameter) - Number(a.diameter)
+        || Number(b.degree ?? 0) - Number(a.degree ?? 0))
 
-    const depth = result.features
-      .filter((f) => f.properties?.object_type === 'depth_crossing' && match(f.properties ?? {}))
-      .map((f) => f.properties as Record<string, unknown>)
+    // Профиль по глубине собирается из самих участков: отдельных объектов
+    // пересечения выгрузка не содержит, вертикаль задана глубинами концов.
+    // В таблицу попадают участки, которые отходят от обычной отметки 3,0 м, —
+    // именно там трасса обходит существующие коммуникации по вертикали.
+    const depth = segments
+      .filter((row) => row.depth_start != null && row.depth_end != null)
+      .filter((row) => Math.abs(Number(row.depth_start) - NORMAL_DEPTH) > 1e-6
+        || Math.abs(Number(row.depth_end) - NORMAL_DEPTH) > 1e-6)
+      .sort((a, b) => Math.max(Number(b.depth_start), Number(b.depth_end))
+        - Math.max(Number(a.depth_start), Number(a.depth_end)))
 
-    // Расчёт по глубине мог пройти и не дать пересечений у этого варианта — это
-    // хороший результат, а не отсутствие расчёта, поэтому вкладка остаётся на месте.
-    const depthMode = result.features
-      .some((f) => f.properties?.object_type === 'depth_crossing')
+    // Режим с глубиной виден по самим данным: в двумерном расчёте глубины null,
+    // и вкладка не нужна. Если глубины есть, а отклонений нет, вкладка остаётся:
+    // это хороший результат, а не отсутствие расчёта.
+    const depthMode = result.features.some((f) => f.properties?.object_type === 'heat_network'
+      && f.properties?.depth_start != null)
 
-    return { segments, reconstruction, depth, depthMode }
+    return { segments, chambers, depth, depthMode }
   }, [result, activeVariant])
 
-  const selectedCrossing = rows.depth.find((row) => String(row.id) === selectedFeatureId)
+  const selectedSegment = rows.depth.find((row) => String(row.id) === selectedFeatureId)
 
   if (!result?.features) {
     return (
@@ -68,15 +85,15 @@ export function SegmentsPanel({
     <Section
       title={
         tab === 'segments' ? 'Участки новой сети'
-          : tab === 'reconstruction' ? 'Реконструкция существующей сети'
-            : 'Пересечения по глубине'
+          : tab === 'chambers' ? 'Новые тепловые камеры'
+            : 'Профиль по глубине'
       }
       hint={
         tab === 'segments'
           ? 'Расход, условный диаметр, способ прокладки и стоимость. Щелчок по строке показывает участок на карте'
-          : tab === 'reconstruction'
-            ? 'Участки, которым после подключения не хватает пропускной способности'
-            : 'Где трасса проходит выше или ниже существующих коммуникаций. Щелчок по строке открывает профиль и разрез'
+          : tab === 'chambers'
+            ? 'Наибольший диаметр примыкающих участков, число примыканий при пределе четыре и стоимость камеры'
+            : 'Участки, которые отходят от обычной глубины 3,0 м. Щелчок по строке открывает продольный профиль магистрали'
       }
       stackRight
       right={
@@ -84,8 +101,8 @@ export function SegmentsPanel({
           <TabButton active={tab === 'segments'} onClick={() => setTab('segments')}>
             Новые ({rows.segments.length})
           </TabButton>
-          <TabButton active={tab === 'reconstruction'} onClick={() => setTab('reconstruction')}>
-            Реконструкция ({rows.reconstruction.length})
+          <TabButton active={tab === 'chambers'} onClick={() => setTab('chambers')}>
+            Камеры ({rows.chambers.length})
           </TabButton>
           {rows.depthMode && (
             <TabButton active={tab === 'depth'} onClick={() => setTab('depth')}>
@@ -138,115 +155,123 @@ export function SegmentsPanel({
             </table>
           </div>
         )
-      ) : tab === 'depth' ? (
-        rows.depth.length === 0 ? (
+      ) : tab === 'chambers' ? (
+        rows.chambers.length === 0 ? (
           <Empty>
-            У этого варианта пересечений с существующими коммуникациями нет:
-            трасса идёт на обычной глубине 3,0 м. Пересечения есть у других вариантов —
-            переключите вариант в панели слева.
+            Новых тепловых камер у этого варианта нет: новая сеть примыкает
+            к существующим камерам.
           </Empty>
         ) : (
-        <div className="max-h-72 overflow-y-auto">
-          <table className="w-full text-[12px]">
-            <thead className="sticky top-0 bg-panel text-[11px] uppercase text-muted">
-              <tr>
-                <th className="py-1 pr-2 text-left font-medium">Участок</th>
-                <th className="py-1 pr-2 text-left font-medium">Объект</th>
-                <th className="py-1 pr-2 text-center font-medium">Проход</th>
-                <th className="py-1 pr-2 text-right font-medium">Глуб.</th>
-                <th className="py-1 text-right font-medium">Просвет</th>
-              </tr>
-            </thead>
-            <tbody className="font-mono">
-              {rows.depth.map((row) => (
-                <tr
-                  key={String(row.id)}
-                  onClick={() => onSelectFeature(
-                    selectedFeatureId === String(row.id) ? null : String(row.id))}
-                  className={
-                    'cursor-pointer border-t border-edge/60 transition-colors ' +
-                    (selectedFeatureId === String(row.id)
-                      ? 'bg-accent/15' : 'hover:bg-edge/40')
-                  }
-                >
-                  <td className="py-1 pr-2 text-slate-300">{String(row.segment_id)}</td>
-                  <td className="py-1 pr-2 text-slate-400">
-                    {RESTRICTION_LABELS[String(row.utility_type)] ?? String(row.utility_type)}
-                  </td>
-                  <td className="py-1 text-center">
-                    <Badge tone={row.passage === 'above' ? 'info' : 'warn'}>
-                      {row.passage === 'above' ? 'сверху' : 'снизу'}
-                    </Badge>
-                  </td>
-                  <td className="py-1 pr-2 text-right text-accent">{String(row.new_depth)} м</td>
-                  <td className="py-1 text-right whitespace-nowrap">
-                    <span className={
-                      Number(row.actual_clearance) + 1e-6 < Number(row.required_clearance)
-                        ? 'text-tie' : 'text-slate-200'
-                    }>
-                      {String(row.actual_clearance)}
-                    </span>
-                    <span className="text-muted"> / {String(row.required_clearance)} м</span>
-                  </td>
+          <div className="max-h-72 overflow-y-auto">
+            <table className="w-full text-[12px]">
+              <thead className="sticky top-0 bg-panel text-[11px] uppercase text-muted">
+                <tr>
+                  <th className="py-1 text-left font-medium">Камера</th>
+                  <th className="py-1 text-right font-medium">ДУ</th>
+                  <th className="py-1 text-right font-medium">Примыканий</th>
+                  <th className="py-1 text-right font-medium">Стоимость</th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
-          {selectedCrossing && (
-            <>
-              <DepthProfile
-                segments={rows.segments}
-                crossings={rows.depth}
-                focusSegmentId={String(selectedCrossing.segment_id)}
-              />
-              <DepthCrossSection crossing={selectedCrossing} />
-            </>
-          )}
-        </div>
+              </thead>
+              <tbody className="font-mono">
+                {rows.chambers.map((row) => {
+                  const degree = row.degree == null ? null : Number(row.degree)
+                  return (
+                    <tr
+                      key={String(row.id)}
+                      onClick={() => onSelectFeature(
+                        selectedFeatureId === String(row.id) ? null : String(row.id))}
+                      className={
+                        'cursor-pointer border-t border-edge/60 transition-colors ' +
+                        (selectedFeatureId === String(row.id)
+                          ? 'bg-accent/15' : 'hover:bg-edge/40')
+                      }
+                    >
+                      <td className="py-1 pr-2 text-slate-300">{String(row.id)}</td>
+                      <td className="py-1 text-right text-accent">{String(row.diameter)}</td>
+                      <td className="py-1 text-right whitespace-nowrap">
+                        {degree == null ? (
+                          <span className="text-muted">—</span>
+                        ) : (
+                          <>
+                            <span className={degree >= MAX_CHAMBER_DEGREE
+                              ? 'text-warn' : 'text-slate-200'}>
+                              {degree}
+                            </span>
+                            <span className="text-muted"> из {MAX_CHAMBER_DEGREE}</span>
+                          </>
+                        )}
+                      </td>
+                      <td className="py-1 text-right text-slate-400">{money(Number(row.cost))}</td>
+                    </tr>
+                  )
+                })}
+              </tbody>
+            </table>
+          </div>
         )
-      ) : rows.reconstruction.length === 0 ? (
-        <Empty>Реконструкция существующей сети не требуется.</Empty>
+      ) : rows.depth.length === 0 ? (
+        <Empty>
+          У этого варианта трасса идёт на обычной глубине 3,0 м целиком.
+          Отклонения по глубине есть у других вариантов — переключите вариант
+          в панели слева.
+        </Empty>
       ) : (
         <div className="max-h-72 overflow-y-auto">
           <table className="w-full text-[12px]">
             <thead className="sticky top-0 bg-panel text-[11px] uppercase text-muted">
               <tr>
-                <th className="py-1 text-left font-medium">Участок</th>
-                <th className="py-1 text-right font-medium">Расход</th>
-                <th className="py-1 text-right font-medium">ДУ</th>
-                <th className="py-1 text-right font-medium">Длина</th>
-                <th className="py-1 text-right font-medium">Стоимость</th>
+                <th className="py-1 pr-2 text-left font-medium">Участок</th>
+                <th className="py-1 pr-2 text-left font-medium">Прокладка</th>
+                <th className="py-1 pr-2 text-right font-medium">Глубина</th>
+                <th className="py-1 text-right font-medium">Уклон</th>
               </tr>
             </thead>
             <tbody className="font-mono">
-              {rows.reconstruction.map((row) => (
-                <tr
-                  key={String(row.id)}
-                  onClick={() => onSelectFeature(
-                    selectedFeatureId === String(row.id) ? null : String(row.id))}
-                  className={
-                    'cursor-pointer border-t border-edge/60 transition-colors ' +
-                    (selectedFeatureId === String(row.id)
-                      ? 'bg-accent/15' : 'hover:bg-edge/40')
-                  }
-                >
-                  <td className="py-1 pr-2 text-slate-300">{String(row.existing_object_id)}</td>
-                  <td className="py-1 text-right text-slate-200">
-                    {flow(Number(row.existing_flow_tph))}
-                    <span className="text-muted"> → </span>
-                    {flow(Number(row.calculated_flow_tph))}
-                  </td>
-                  <td className="py-1 text-right">
-                    <span className="text-muted">{String(row.existing_diameter)}</span>
-                    <span className="text-muted"> → </span>
-                    <span className="text-recon">{String(row.required_diameter)}</span>
-                  </td>
-                  <td className="py-1 text-right text-slate-200">{meters(Number(row.length))}</td>
-                  <td className="py-1 text-right text-slate-400">{money(Number(row.cost))}</td>
-                </tr>
-              ))}
+              {rows.depth.map((row) => {
+                const from = Number(row.depth_start)
+                const to = Number(row.depth_end)
+                const length = Number(row.length)
+                const slope = length > 0 ? Math.abs(to - from) / length : 0
+                return (
+                  <tr
+                    key={String(row.id)}
+                    onClick={() => onSelectFeature(
+                      selectedFeatureId === String(row.id) ? null : String(row.id))}
+                    className={
+                      'cursor-pointer border-t border-edge/60 transition-colors ' +
+                      (selectedFeatureId === String(row.id)
+                        ? 'bg-accent/15' : 'hover:bg-edge/40')
+                    }
+                  >
+                    <td className="py-1 pr-2 text-slate-300">{String(row.id)}</td>
+                    <td className="py-1 pr-2">
+                      {row.laying_method === 'special'
+                        ? <Badge tone="warn">спец</Badge>
+                        : <span className="text-muted">обычная</span>}
+                    </td>
+                    <td className="py-1 pr-2 text-right whitespace-nowrap">
+                      <span className="text-slate-400">{from.toFixed(1)}</span>
+                      <span className="text-muted"> → </span>
+                      <span className="text-accent">{to.toFixed(1)}</span>
+                      <span className="text-muted"> м</span>
+                    </td>
+                    <td className="py-1 text-right whitespace-nowrap">
+                      <span className={slope > MAX_SLOPE + 1e-9 ? 'text-alert' : 'text-slate-200'}>
+                        {slope.toFixed(3)}
+                      </span>
+                      <span className="text-muted"> м/м</span>
+                    </td>
+                  </tr>
+                )
+              })}
             </tbody>
           </table>
+          {selectedSegment && (
+            <DepthProfile
+              segments={rows.segments}
+              focusSegmentId={String(selectedSegment.id)}
+            />
+          )}
         </div>
       )}
     </Section>

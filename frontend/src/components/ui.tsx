@@ -68,7 +68,7 @@ export function Button({ children, onClick, disabled, variant = 'primary', title
         'disabled:cursor-not-allowed disabled:opacity-40',
         variant === 'primary' && 'bg-accent text-ink hover:bg-accent/85',
         variant === 'ghost' && 'border border-edge text-slate-200 hover:bg-edge/60',
-        variant === 'danger' && 'border border-tie/50 text-tie hover:bg-tie/10',
+        variant === 'danger' && 'border border-alert/50 text-alert hover:bg-alert/10',
       )}
     >
       {children}
@@ -86,8 +86,8 @@ export function Badge({ children, tone = 'neutral' }: {
         'rounded px-1.5 py-0.5 text-[11px] font-medium',
         tone === 'neutral' && 'bg-edge text-slate-300',
         tone === 'good' && 'bg-oks/15 text-oks',
-        tone === 'warn' && 'bg-recon/15 text-recon',
-        tone === 'bad' && 'bg-tie/15 text-tie',
+        tone === 'warn' && 'bg-warn/15 text-warn',
+        tone === 'bad' && 'bg-alert/15 text-alert',
         tone === 'info' && 'bg-accent/15 text-accent',
       )}
     >

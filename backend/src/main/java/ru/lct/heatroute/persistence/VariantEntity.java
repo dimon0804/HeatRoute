@@ -28,7 +28,7 @@ public class VariantEntity {
     @JoinColumn(name = "job_id", nullable = false)
     private CalculationJobEntity job;
 
-    /** Значение variant_id в выгрузке (раздел 10 ТП). */
+    /** Значение variant_id в выгрузке (раздел 7 ТП). */
     @Column(name = "variant_code", nullable = false, length = 64)
     private String variantCode;
 

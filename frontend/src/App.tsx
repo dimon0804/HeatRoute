@@ -25,7 +25,7 @@ const TABS: { key: Tab; label: string }[] = [
  * <p>
  * Состав и порядок панелей повторяют сценарий демонстрации из раздела 4 ТЗ:
  * загрузить набор, посмотреть разбор, запустить расчёт, увидеть построенную сеть
- * с врезками и расходами, сравнить варианты, выгрузить результат.
+ * с камерами и расходами, сравнить варианты, выгрузить результат.
  */
 export default function App() {
   const [datasets, setDatasets] = useState<Dataset[]>([])
@@ -38,7 +38,6 @@ export default function App() {
   const [uploading, setUploading] = useState(false)
   const [basemap, setBasemap] = useState(false)
   const [withDepth, setWithDepth] = useState(false)
-  const [networkLoaded, setNetworkLoaded] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [fitKey, setFitKey] = useState<string | null>(null)
   const [selectedFeatureId, setSelectedFeatureId] = useState<string | null>(null)
@@ -127,12 +126,12 @@ export default function App() {
     setSelectedFeatureId(null)
     setTab('variants')
     try {
-      const created = await api.submitJob(dataset.id, withDepth, zones, networkLoaded)
+      const created = await api.submitJob(dataset.id, withDepth, zones)
       setJob(created)
     } catch (e) {
       setError(e instanceof ApiError ? e.message : (e as Error).message)
     }
-  }, [dataset, withDepth, zones, networkLoaded])
+  }, [dataset, withDepth, zones])
 
   // --- запретные зоны ---------------------------------------------------------------------
   const handlePlaceZone = useCallback((lon: number, lat: number) => {
@@ -158,7 +157,11 @@ export default function App() {
     return () => window.clearInterval(timer)
   }, [job])
 
-  const canRun = Boolean(dataset && dataset.status !== 'FAILED'
+  // Пока идёт приём файла, расчёт запускать нельзя. Разбор выполняется на сервере
+  // синхронно и занимает секунды; за это время в панели виден набор, открытый при
+  // старте, и запуск ушёл бы по нему. Дальше загрузка открыла бы уже свой набор
+  // и молча отбросила начатый расчёт вместе с его результатом.
+  const canRun = Boolean(dataset && dataset.status !== 'FAILED' && !uploading
     && job?.status !== 'RUNNING' && job?.status !== 'QUEUED')
 
   const headline = useMemo(() => {
@@ -189,8 +192,10 @@ export default function App() {
           )}
           <label
             className="flex cursor-pointer items-center gap-1.5 text-[12px] text-muted"
-            title="Дополнительная задача кейса: подбор глубины участков, прохождение
-                   пересечений сверху или снизу, коэффициент стоимости по глубине"
+            title="Необязательный режим кейса: подбор глубины участков, прохождение
+                   пересечений сверху или снизу, коэффициент стоимости по глубине.
+                   Варианты этого режима считаются отдельно и в одно ранжирование
+                   с двумерными не сводятся"
           >
             <input
               type="checkbox"
@@ -199,20 +204,6 @@ export default function App() {
               className="accent-accent"
             />
             с учётом глубины
-          </label>
-          <label
-            className="flex cursor-pointer items-center gap-1.5 text-[12px] text-muted"
-            title="Расхода существующей сети во входных данных нет, и по умолчанию он принят
-                   нулевым. Здесь он принимается равным половине пропускной способности —
-                   так видно, во что обходится это допущение по объёму реконструкции"
-          >
-            <input
-              type="checkbox"
-              checked={networkLoaded}
-              onChange={(e) => setNetworkLoaded(e.target.checked)}
-              className="accent-accent"
-            />
-            сеть загружена
           </label>
           <label className="flex cursor-pointer items-center gap-1.5 text-[12px] text-muted">
             <input
@@ -230,7 +221,7 @@ export default function App() {
       </header>
 
       {error && (
-        <div className="shrink-0 border-b border-tie/40 bg-tie/10 px-4 py-2 text-[12.5px] text-tie">
+        <div className="shrink-0 border-b border-alert/40 bg-alert/10 px-4 py-2 text-[12.5px] text-alert">
           {error}
           <button type="button" className="ml-3 underline" onClick={() => setError(null)}>
             скрыть

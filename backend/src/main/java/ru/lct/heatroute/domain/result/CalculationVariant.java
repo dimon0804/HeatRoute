@@ -23,19 +23,33 @@ public class CalculationVariant {
     String description;
 
     List<NewSegment> segments;
-    List<TieInResult> tieIns;
     List<NewChamberResult> chambers;
     List<TechnicalNodeResult> technicalNodes;
-    List<ReconstructionResult> reconstructions;
-    List<ChamberReconstructionResult> chamberReconstructions;
+
+    /**
+     * Присоединения частей сети к существующей. Отдельными объектами выгрузки они
+     * больше не являются (раздел 2.4 ТП, разъяснение №13): запись нужна для подсчёта
+     * стоимости врезок и для объяснения в интерфейсе, куда присоединена каждая часть.
+     */
+    List<TieInResult> tieIns;
 
     @With
     VariantSummary summary;
 
     /**
+     * Вершин, не приведённых к пределу угла поворота 90°. В выгрузку не идёт, но доходит
+     * до показателей прогона: нарушение предела надо показывать, а не прятать в журнале.
+     */
+    @lombok.Builder.Default
+    int sharpTurns = 0;
+
+    /**
      * Пересечения с существующими коммуникациями по глубине. Пусто в плоской задаче.
-     * Раздел 7 приложения по глубине требует показать их в результате вместе
-     * с прохождением сверху или снизу и расчётными вертикальными расстояниями.
+     * <p>
+     * В выходной файл они не попадают: раздел 7.1 ТП перечисляет ровно четыре типа
+     * выходных объектов, и лишнего типа там нет. Но показать пересечения на защите
+     * и на продольном профиле надо, поэтому они сохраняются рядом с результатом
+     * и доходят до интерфейса, минуя выгрузку.
      */
     @lombok.Builder.Default
     List<ru.lct.heatroute.depth.UtilityCrossing> depthCrossings = List.of();

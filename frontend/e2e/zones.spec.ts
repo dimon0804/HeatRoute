@@ -25,9 +25,11 @@ test.describe('Запретные зоны', () => {
 
     await page.getByRole('button', { name: 'Данные', exact: true }).click()
     await page.setInputFiles('input[type=file]', DATASET)
-    await expect(page.getByRole('button', { name: /^Разбор\d+$/ })).toBeVisible({
-      timeout: 120_000,
-    })
+    // Признак окончания приёма файла — переход на протокол разбора. Счётчик
+    // записей протокола для этого не годится: он может быть уже виден по набору,
+    // который приложение открыло при старте, и тогда расчёт уйдёт по чужому
+    // набору, а дописавшаяся загрузка его отбросит.
+    await expect(page.getByText('Протокол разбора')).toBeVisible({ timeout: 120_000 })
 
     // --- расчёт без запретов: он и даёт точку, которую потом запрещаем ---------------
     await runCalculation(page)
@@ -51,6 +53,8 @@ test.describe('Запретные зоны', () => {
     await runCalculation(page)
 
     const restricted = await fetchBestGeometry(page)
+    // Проверяем именно второй расчёт, а не тот же самый результат заново.
+    expect(restricted.jobId).not.toBe(baseline.jobId)
     const radiusM = 40
 
     // Ни один новый участок не проходит через зону: это и есть смысл запрета.
@@ -70,9 +74,12 @@ test.describe('Запретные зоны', () => {
 /**
  * Запуск расчёта с ожиданием его окончания.
  * <p>
- * Ждать появления строки «Лучший вариант» нельзя: при повторном запуске она ещё
- * показывает итог предыдущего расчёта, и проверка проходит мгновенно на старом
- * значении. Признак окончания — кнопка запуска, которая снова стала доступной.
+ * Ждать одного лишь появления строки «Лучший вариант» нельзя: при повторном
+ * запуске она ещё показывает итог предыдущего расчёта, и проверка прошла бы
+ * мгновенно на старом значении. Признак окончания — кнопка запуска, которая
+ * была заблокирована на время этого расчёта и снова стала доступной. Строка
+ * итога проверяется уже после этого: она отличает завершённый расчёт от
+ * прерванного, у которого кнопка тоже разблокируется.
  */
 async function runCalculation(page: import('@playwright/test').Page) {
   const button = page.getByRole('button', { name: /Запустить расчёт|Расчёт идёт/ })
@@ -84,11 +91,12 @@ async function runCalculation(page: import('@playwright/test').Page) {
 
 /** Геометрия участков лучшего варианта из выгрузки текущего расчёта. */
 async function fetchBestGeometry(page: import('@playwright/test').Page) {
-  const data = await page.evaluate(async () => {
+  const { jobId, data } = await page.evaluate(async () => {
+    // Список расчётов отдаётся от новых к старым, поэтому первый — текущий.
     const jobs = await fetch('/api/v1/jobs?size=1').then((r) => r.json())
     const id = jobs[0].id
     const geo = await fetch(`/api/v1/jobs/${id}/result.geojson`).then((r) => r.json())
-    return geo
+    return { jobId: id as string, data: geo }
   })
 
   const best = data.features
@@ -110,7 +118,7 @@ async function fetchBestGeometry(page: import('@playwright/test').Page) {
       }
     })
 
-  return { variantId, segments }
+  return { jobId, variantId, segments }
 }
 
 /** Щелчок по карте в заданной географической точке. */

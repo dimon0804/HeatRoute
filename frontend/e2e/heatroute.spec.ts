@@ -5,7 +5,7 @@ import { fileURLToPath } from 'node:url'
 /**
  * Сквозной сценарий работы сервиса — тот же, что показывается на защите
  * (раздел 4 ТЗ): загрузить конкурсный набор, увидеть протокол разбора, запустить
- * расчёт, получить варианты, посмотреть участки и реконструкцию, выгрузить результат.
+ * расчёт, получить варианты, посмотреть участки новой сети, выгрузить результат.
  *
  * Проверка идёт против поднятого стека целиком, включая базу и nginx: смысл именно
  * в том, что части работают вместе. Отдельные слои покрыты тестами на бэкенде.
@@ -53,11 +53,12 @@ test.describe('Сценарий демонстрации', () => {
     expect(scoreCount).toBeGreaterThanOrEqual(1)
     expect(scoreCount).toBeLessThanOrEqual(3)
 
-    // Разбор стоимости у раскрытого варианта: все составляющие раздела 8 ТП.
+    // Разбор стоимости у раскрытого варианта: три составляющие раздела 6 приложения.
     await expect(page.getByText('Из чего сложилась стоимость')).toBeVisible()
     await expect(page.getByText('Новые участки сети')).toBeVisible()
-    await expect(page.getByText('Врезки', { exact: true })).toBeVisible()
-    await expect(page.getByText('Реконструкция участков')).toBeVisible()
+    await expect(page.getByText('Новые тепловые камеры')).toBeVisible()
+    await expect(page.getByText(/Врезки в существующие камеры/)).toBeVisible()
+    await expect(page.getByText('Стоимость строительства')).toBeVisible()
 
     // --- 5. Участки ----------------------------------------------------------------------
     await page.getByRole('button', { name: 'Участки', exact: true }).click()
@@ -74,7 +75,7 @@ test.describe('Сценарий демонстрации', () => {
     expect(download.suggestedFilename()).toContain('.geojson')
   })
 
-  test('расчёт с учётом глубины даёт пересечения и глубины участков', async ({ page }) => {
+  test('расчёт с учётом глубины даёт профиль участков по глубине', async ({ page }) => {
     await page.goto('/')
     await uploadDataset(page)
 
@@ -82,25 +83,17 @@ test.describe('Сценарий демонстрации', () => {
     await page.getByRole('button', { name: 'Запустить расчёт' }).click()
     await waitForCalculation(page)
 
-    // Пересечения бывают не у каждого варианта: у лучшего трасса может идти
-    // на обычной глубине целиком. Переключаемся на тот, где они есть.
-    await page.getByRole('button', { name: /^Варианты/ }).click()
-    await page.getByText('по глубине', { exact: false }).first().click()
+    // Профиль строится по глубинам концов участков: отдельных объектов
+    // пересечения выгрузка больше не содержит.
+    await openDepthProfile(page)
+    await expect(page.getByText('Профиль по глубине')).toBeVisible()
 
-    await page.getByRole('button', { name: 'Участки', exact: true }).click()
-    await page.getByRole('button', { name: /^Глубина/ }).click()
-
-    await expect(page.getByText('Пересечения по глубине')).toBeVisible()
-    // Прохождение сверху или снизу и вертикальный просвет — требование раздела 7
-    // приложения по глубине.
-    await expect(page.locator('table tbody tr').first()).toBeVisible()
-    await expect(page.getByText('сверху').first()).toBeVisible()
-
-    // Щелчок по пересечению раскрывает продольный профиль магистрали и разрез.
+    // Щелчок по участку раскрывает продольный профиль магистрали.
     // Предельный уклон 0,10 м/м — величина, которую проверяющий спросит первой.
     await page.locator('table tbody tr').first().click()
-    await expect(page.getByText('Продольный профиль магистрали')).toBeVisible()
-    await expect(page.getByText('Разрез в месте пересечения')).toBeVisible()
+    // Точное совпадение: те же слова есть и в пояснении к таблице над ней.
+    await expect(page.getByText('Продольный профиль магистрали', { exact: true }))
+      .toBeVisible()
     await expect(page.getByText(/Наибольший уклон/)).toBeVisible()
     await expect(page.getByText(/при пределе 0,10 м\/м|при пределе 0\.10 м\/м/)).toBeVisible()
   })
@@ -128,10 +121,45 @@ test.describe('Сценарий демонстрации', () => {
 async function uploadDataset(page: Page) {
   await page.getByRole('button', { name: 'Данные', exact: true }).click()
   await page.setInputFiles('input[type=file]', DATASET)
-  // Разбор идёт синхронно при загрузке: признак готовности — появление вкладки
-  // разбора с непустым счётчиком записей протокола.
-  await expect(page.getByRole('button', { name: /^Разбор\d+$/ }))
-    .toBeVisible({ timeout: 120_000 })
+  // Разбор идёт синхронно при приёме файла и занимает секунды. Ждать счётчика
+  // записей протокола нельзя: он может быть уже виден по набору, который
+  // приложение открыло при старте, и тогда проверка пройдёт до конца загрузки.
+  // Признак готовности — переход на протокол разбора: это последнее, что делает
+  // загрузка, и по чужому набору он не случается.
+  await expect(page.getByText('Протокол разбора')).toBeVisible({ timeout: 120_000 })
+  await expect(page.getByRole('button', { name: /^Разбор\d+$/ })).toBeVisible()
+}
+
+/**
+ * Открывает профиль по глубине у варианта, где он содержателен.
+ * <p>
+ * Отклонения от обычной отметки 3,0 м есть не у каждого варианта: у лучшего
+ * трасса может идти на обычной глубине целиком, и тогда таблица пуста по делу.
+ * Интерфейс в этом случае предлагает переключить вариант — тест делает то же.
+ */
+async function openDepthProfile(page: Page) {
+  await page.getByRole('button', { name: /^Варианты/ }).click()
+  const variants = page.getByRole('button', { name: /^№ \d+$/ })
+  const total = await variants.count()
+  expect(total).toBeGreaterThan(0)
+
+  for (let index = 0; index < total; index++) {
+    await variants.nth(index).click()
+    await page.getByRole('button', { name: 'Участки', exact: true }).click()
+
+    // Вкладка глубины есть, только если у участков заполнены глубины концов:
+    // в двумерном режиме её не будет, и это отдельный повод для падения.
+    const depthTab = page.getByRole('button', { name: /^Глубина \(\d+\)$/ })
+    await expect(depthTab).toBeVisible()
+    const label = (await depthTab.textContent()) ?? ''
+    if (Number(/\((\d+)\)/.exec(label)?.[1] ?? 0) > 0) {
+      await depthTab.click()
+      return
+    }
+    await page.getByRole('button', { name: /^Варианты/ }).click()
+  }
+
+  throw new Error('Ни у одного варианта нет участков с отклонением по глубине от 3,0 м')
 }
 
 async function waitForCalculation(page: Page) {

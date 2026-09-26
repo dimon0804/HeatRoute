@@ -98,17 +98,22 @@ class SearchHeadroomTest {
         VariantPlanner.Plan plan = planner.plan(assembler.assemble(collector));
         CalculationVariant best = plan.getVariants().get(0);
 
+        // Стоимость строительства — это участки плюс камеры плюс врезки, поэтому
+        // на трубу приходится остаток после двух известных слагаемых.
+        double pipe = best.getSummary().getConstructionCost()
+                - best.getSummary().getChamberConstructionCost()
+                - best.getSummary().getExistingChamberTieInCost();
+
         System.out.println();
         System.out.println("=========== СТРУКТУРА ЗАТРАТ ЛУЧШЕГО ВАРИАНТА ===========");
         System.out.printf("Труба      %,15.0f руб. за %.1f м%n",
-                best.getSummary().getConstructionCost(), best.getSummary().getNewNetworkLength());
+                pipe, best.getSummary().getNewNetworkLength());
         System.out.printf("Камеры     %,15.0f руб. за %d шт.%n",
                 best.getSummary().getChamberConstructionCost(), best.getChambers().size());
         System.out.printf("Врезки     %,15.0f руб. за %d шт.%n",
-                best.getSummary().getTieInCost(), best.getTieIns().size());
-        System.out.printf("Реконстр.  %,15.0f руб. за %.1f м%n",
-                best.getSummary().getReconstructionCost(),
-                best.getSummary().getReconstructionLength());
+                best.getSummary().getExistingChamberTieInCost(),
+                best.getSummary().getExistingChamberTieInCount());
+        System.out.printf("Штраф      %,15.0f руб.%n", best.getSummary().getUnconnectedPenalty());
         System.out.println("Камеры по диаметрам:");
         best.getChambers().stream()
                 .collect(java.util.stream.Collectors.groupingBy(

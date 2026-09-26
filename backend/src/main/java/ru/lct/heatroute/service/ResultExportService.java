@@ -8,6 +8,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import ru.lct.heatroute.export.GeoJsonResultWriter;
 import ru.lct.heatroute.export.WorkStatementWriter;
+import ru.lct.heatroute.export.ResultFeatureFactory;
 import ru.lct.heatroute.export.ResultFeatureFactory.ResultFeature;
 import ru.lct.heatroute.persistence.CalculationJobEntity;
 import ru.lct.heatroute.persistence.CalculationJobRepository;
@@ -66,7 +67,13 @@ public class ResultExportService {
     @Transactional(readOnly = true)
     public void streamResult(UUID jobId, OutputStream out) throws IOException {
         try (Stream<VariantFeatureEntity> rows = features.streamByJob(jobId)) {
-            writer.writeCollection(out, sink -> rows.forEach(row -> sink.accept(toFeature(row))));
+            // Раздел 7.1 ТП перечисляет ровно четыре типа выходных объектов. В базе
+            // рядом с ними лежат пересечения по глубине — они нужны интерфейсу
+            // и продольному профилю, но в файл выгрузки не идут.
+            writer.writeCollection(out, sink -> rows
+                    .filter(row -> ResultFeatureFactory.exportedObjectTypes()
+                            .contains(row.getObjectType()))
+                    .forEach(row -> sink.accept(toFeature(row))));
         }
     }
 
@@ -98,23 +105,32 @@ public class ResultExportService {
             throws IOException {
         CalculationJobEntity job = jobs.findById(jobId)
                 .orElseThrow(() -> new IllegalArgumentException("Расчёт не найден: " + jobId));
-        List<VariantEntity> all = variants.findByJobIdOrderByRankAsc(jobId);
-        if (all.isEmpty()) {
+        List<VariantEntity> ranked = variants.findByJobIdOrderByRankAsc(jobId);
+        if (ranked.isEmpty()) {
             throw new IllegalStateException("У расчёта нет вариантов: ведомость не построить");
         }
-        VariantEntity variant = all.stream()
+        VariantEntity variant = ranked.stream()
                 .filter(v -> variantCode == null || variantCode.isEmpty()
                         || variantCode.equals(v.getVariantCode()))
                 .findFirst()
                 .orElseThrow(() -> new IllegalArgumentException(
                         "Вариант не найден: " + variantCode));
 
-        List<WorkStatementWriter.Row> rows = features
-                .findByVariantIdOrderByOrdinalAsc(variant.getId()).stream()
+        List<VariantFeatureEntity> all = features.findByVariantIdOrderByOrdinalAsc(variant.getId());
+
+        List<WorkStatementWriter.Row> rows = all.stream()
                 .filter(row -> !"variant_summary".equals(row.getObjectType()))
                 .map(row -> new WorkStatementWriter.Row(
                         row.getObjectType(), row.getFeatureId(), properties(row)))
                 .collect(java.util.stream.Collectors.toList());
+
+        // Врезки в существующие камеры перестали быть отдельными объектами выгрузки,
+        // поэтому их количество и стоимость ведомость берёт из сводной записи.
+        Map<String, Object> summary = all.stream()
+                .filter(row -> "variant_summary".equals(row.getObjectType()))
+                .findFirst()
+                .map(this::properties)
+                .orElseGet(LinkedHashMap::new);
 
         WorkStatementWriter.Header header = new WorkStatementWriter.Header(
                 job.getDataset() == null ? "" : job.getDataset().getOriginalName(),
@@ -122,7 +138,8 @@ public class ResultExportService {
                 variant.getRank(),
                 variant.getDescription(),
                 variant.getScore(),
-                OffsetDateTime.now().format(DateTimeFormatter.ofPattern("dd.MM.yyyy HH:mm")));
+                OffsetDateTime.now().format(DateTimeFormatter.ofPattern("dd.MM.yyyy HH:mm")),
+                summary);
 
         statement.write(out, header, rows);
         log.info("Ведомость по расчёту {} варианту {}: строк {}",

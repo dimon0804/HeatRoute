@@ -1,13 +1,13 @@
 /**
  * Продольный профиль трассы по глубине.
  *
- * Разрез в точке пересечения объясняет одно место, но проверяющему нужен ответ
- * на другой вопрос: как труба приходит на эту глубину и возвращается обратно.
- * Дополнительная задача ограничивает уклон 0,10 м/м и требует площадки перед
- * пересечением — на профиле и то и другое видно целиком.
+ * Отдельных объектов пересечения выгрузка больше не содержит: вертикальное
+ * положение задано только глубинами начала и конца участка. Этого достаточно,
+ * чтобы собрать профиль целиком и ответить на главный вопрос по режиму глубины —
+ * как труба уходит вниз, на какой отметке идёт и выдержан ли предельный уклон.
  *
- * Данных выгрузки для этого достаточно: участок хранит узлы своих концов,
- * а материализация идёт от точки врезки наружу, поэтому `start_node_id`
+ * Данных выгрузки для этого хватает: участок хранит узлы своих концов,
+ * а материализация идёт от места присоединения наружу, поэтому `start_node_id`
  * всегда обращён к источнику. Цепочка восстанавливается по совпадению узлов.
  */
 
@@ -18,21 +18,23 @@ export interface ProfilePoint {
   depth: number
 }
 
-export interface ProfileCrossing {
+/** Один участок цепочки с его положением на профиле. */
+export interface ProfileSegment {
   id: string
-  distance: number
-  depth: number
-  passage: 'above' | 'below'
-  utilityType: string
-  utilityDepth: number
-  actualClearance: number
+  /** Расстояние от начала цепочки до начала участка, м. */
+  from: number
+  /** Расстояние от начала цепочки до конца участка, м. */
+  to: number
+  depthStart: number
+  depthEnd: number
+  /** Уклон участка по абсолютной величине, м/м. */
+  slope: number
 }
 
 export interface LongProfile {
   points: ProfilePoint[]
-  crossings: ProfileCrossing[]
-  /** Участки цепочки по порядку — для подсветки на карте. */
-  segmentIds: string[]
+  /** Участки цепочки по порядку — для подсветки на карте и на чертеже. */
+  segments: ProfileSegment[]
   totalLength: number
   /** Наибольший уклон профиля, м/м. */
   maxSlope: number
@@ -53,7 +55,6 @@ const num = (v: unknown): number => Number(v)
  */
 export function buildLongProfile(
   segments: Props[],
-  crossings: Props[],
   focusSegmentId: string,
 ): LongProfile | null {
   const byId = new Map<string, Props>()
@@ -73,7 +74,7 @@ export function buildLongProfile(
   const focus = byId.get(focusSegmentId)
   if (!focus) return null
 
-  // Вверх до точки врезки.
+  // Вверх до места присоединения к существующей сети.
   const upstream: Props[] = []
   const seen = new Set<string>([focusSegmentId])
   let cursor = byEnd.get(String(focus.start_node_id))
@@ -99,14 +100,7 @@ export function buildLongProfile(
   const chain = [...upstream, focus, ...downstream]
 
   const points: ProfilePoint[] = []
-  const chainCrossings: ProfileCrossing[] = []
-  const crossingsBySegment = new Map<string, Props[]>()
-  for (const c of crossings) {
-    const key = String(c.segment_id)
-    const list = crossingsBySegment.get(key)
-    if (list) list.push(c)
-    else crossingsBySegment.set(key, [c])
-  }
+  const chainSegments: ProfileSegment[] = []
 
   let distance = 0
   let maxSlope = 0
@@ -114,22 +108,17 @@ export function buildLongProfile(
     const length = num(s.length)
     const from = num(s.depth_start)
     const to = num(s.depth_end)
+    const slope = length > 0 ? Math.abs(to - from) / length : 0
     if (points.length === 0) points.push({ distance, depth: from })
-    if (length > 0) maxSlope = Math.max(maxSlope, Math.abs(to - from) / length)
-    // Положение внутри участка берётся из выгрузки; середина — запасной вариант
-    // для результатов, посчитанных до появления этого атрибута.
-    for (const c of crossingsBySegment.get(String(s.id)) ?? []) {
-      const station = c.station == null ? length / 2 : num(c.station)
-      chainCrossings.push({
-        id: String(c.id),
-        distance: distance + Math.max(0, Math.min(length, station)),
-        depth: num(c.new_depth),
-        passage: c.passage === 'below' ? 'below' : 'above',
-        utilityType: String(c.utility_type),
-        utilityDepth: num(c.utility_depth),
-        actualClearance: num(c.actual_clearance),
-      })
-    }
+    maxSlope = Math.max(maxSlope, slope)
+    chainSegments.push({
+      id: String(s.id),
+      from: distance,
+      to: distance + length,
+      depthStart: from,
+      depthEnd: to,
+      slope,
+    })
     distance += length
     points.push({ distance, depth: to })
   }
@@ -138,8 +127,7 @@ export function buildLongProfile(
 
   return {
     points,
-    crossings: chainCrossings,
-    segmentIds: chain.map((s) => String(s.id)),
+    segments: chainSegments,
     totalLength: distance,
     maxSlope,
     minDepth: Math.min(...points.map((p) => p.depth)),

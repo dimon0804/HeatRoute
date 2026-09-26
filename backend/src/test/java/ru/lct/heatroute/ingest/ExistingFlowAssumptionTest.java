@@ -7,8 +7,6 @@ import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.test.context.ActiveProfiles;
 import ru.lct.heatroute.domain.model.ExistingSegment;
 import ru.lct.heatroute.domain.model.InputScene;
-import ru.lct.heatroute.domain.result.CalculationVariant;
-import ru.lct.heatroute.variant.VariantPlanner;
 
 import java.io.InputStream;
 import java.util.Objects;
@@ -16,13 +14,18 @@ import java.util.Objects;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
- * Допущение о загрузке существующей сети, задаваемое на один расчёт.
+ * Допущение о загрузке существующей сети, задаваемое на один разбор.
  * <p>
- * Расхода существующих участков в конкурсном наборе нет, и принятое значение — самое
- * влиятельное допущение решения: от него зависит, какие участки попадут под
- * реконструкцию. Проверяется, что допущение действительно меняет результат и что
- * оно не протекает между расчётами: расчёты идут в несколько потоков, и подмена
- * общих настроек означала бы, что один расчёт портит другой.
+ * В обязательной расчётной модели редакции приложения от 18.09 текущий расход и резерв
+ * пропускной способности существующей сети не определяются: реконструкции больше нет,
+ * и влиять на результат этому допущению стало нечем. Режим остался исследовательским —
+ * им отвечают на вопрос «а что было бы, если сеть уже загружена», и ответ идёт мимо
+ * обязательного расчёта.
+ * <p>
+ * Поэтому здесь проверяется только то, что от режима ещё зависит: значение расхода
+ * у разобранных участков и отсутствие протечки допущения в настройки сервиса. Расчёты
+ * идут в несколько потоков, и подмена общих настроек означала бы, что один расчёт
+ * портит другой.
  */
 @SpringBootTest
 @ActiveProfiles("nodb")
@@ -32,8 +35,6 @@ class ExistingFlowAssumptionTest {
     GeoJsonStreamParser parser;
     @Autowired
     SceneAssembler assembler;
-    @Autowired
-    VariantPlanner planner;
     @Autowired
     IngestProperties props;
 
@@ -84,35 +85,10 @@ class ExistingFlowAssumptionTest {
         assertThat(props.getExistingFlowMode()).isEqualTo(before);
         assertThat(props.getExistingFlowCapacityFraction()).isEqualTo(fractionBefore);
 
-        // И следующий разбор без указания режима идёт по настройкам сервиса.
+        // И следующий разбор без указания режима идёт по настройкам сервиса,
+        // а по ним расход существующей сети не определяется.
         InputScene scene = assembler.assemble(read());
         assertThat(scene.getSegments())
                 .allSatisfy(s -> assertThat(s.getFlowTph()).isZero());
-    }
-
-    @Test
-    @DisplayName("Загруженная сеть увеличивает объём реконструкции")
-    void loadedNetworkNeedsMoreReconstruction() throws Exception {
-        InputScene empty = assembler.assemble(read(),
-                IngestProperties.ExistingFlowMode.ZERO, null);
-        InputScene loaded = assembler.assemble(read(),
-                IngestProperties.ExistingFlowMode.CAPACITY_FRACTION, 0.5);
-
-        CalculationVariant bestEmpty = planner.plan(empty).getVariants().get(0);
-        CalculationVariant bestLoaded = planner.plan(loaded).getVariants().get(0);
-
-        System.out.printf("%nДопущение о загрузке существующей сети:%n"
-                        + "  расход 0      → реконструкция %.1f м, %,.0f руб., S = %.3f%n"
-                        + "  50%% ёмкости   → реконструкция %.1f м, %,.0f руб., S = %.3f%n%n",
-                bestEmpty.getSummary().getReconstructionLength(),
-                bestEmpty.getSummary().getReconstructionCost(),
-                bestEmpty.getSummary().getScore(),
-                bestLoaded.getSummary().getReconstructionLength(),
-                bestLoaded.getSummary().getReconstructionCost(),
-                bestLoaded.getSummary().getScore());
-
-        assertThat(bestLoaded.getSummary().getReconstructionLength())
-                .as("сеть, уже несущая расход, требует не меньше реконструкции")
-                .isGreaterThanOrEqualTo(bestEmpty.getSummary().getReconstructionLength());
     }
 }

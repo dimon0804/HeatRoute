@@ -4,12 +4,9 @@ import lombok.Value;
 import org.locationtech.jts.geom.Geometry;
 import org.springframework.stereotype.Component;
 import ru.lct.heatroute.domain.result.CalculationVariant;
-import ru.lct.heatroute.domain.result.ChamberReconstructionResult;
 import ru.lct.heatroute.domain.result.NewChamberResult;
 import ru.lct.heatroute.domain.result.NewSegment;
-import ru.lct.heatroute.domain.result.ReconstructionResult;
 import ru.lct.heatroute.domain.result.TechnicalNodeResult;
-import ru.lct.heatroute.domain.result.TieInResult;
 import ru.lct.heatroute.domain.result.VariantSummary;
 import ru.lct.heatroute.geo.Geo;
 import ru.lct.heatroute.geo.ProjectionService;
@@ -19,15 +16,22 @@ import java.util.Map;
 import java.util.function.Consumer;
 
 /**
- * Единственное место, где определяется состав выходного объекта по разделу 10 ТП.
+ * Единственное место, где определяется состав выходного объекта по разделу 7 ТП
+ * в редакции от 18.09.
  * <p>
  * Тот же объект уходит и в файл выгрузки, и в базу. Если бы состав атрибутов
  * описывался дважды, он бы рано или поздно разошёлся, и выгрузка перестала бы
  * соответствовать тому, что показывает интерфейс.
  * <p>
- * Раздел 10 требует, чтобы у каждого типа был только свой обязательный набор полей
- * и чтобы поля чужих типов не добавлялись со значением {@code null}. Поэтому набор
- * собирается поимённо для каждого типа, а не общим отображением объекта.
+ * Раздел 7.1 перечисляет ровно четыре типа выходных объектов: участок новой сети,
+ * новая тепловая камера, технический узел и сводка по варианту. Точек врезки
+ * и объектов реконструкции больше нет. Дополнительные свойства приложение разрешает
+ * и при проверке игнорирует, а вот лишних типов объектов не предусматривает, поэтому
+ * состав типов держим ровно по разделу 7.1.
+ * <p>
+ * Пересечения по глубине — единственное исключение, и оно намеренно выведено из
+ * выгрузки: {@link #forEach} их не отдаёт, а {@link #forEachWithDiagnostics} отдаёт.
+ * Первый обход питает выходной файл, второй — базу и интерфейс.
  */
 @Component
 public class ResultFeatureFactory {
@@ -45,7 +49,7 @@ public class ResultFeatureFactory {
         String id;
         /** Геометрия в WGS 84; {@code null} у сводной записи варианта. */
         Geometry geometry;
-        /** Атрибуты в порядке таблиц раздела 10 ТП. */
+        /** Атрибуты в порядке таблиц раздела 7 ТП. */
         Map<String, Object> properties;
     }
 
@@ -56,16 +60,30 @@ public class ResultFeatureFactory {
      */
     public void forEach(CalculationVariant variant, Consumer<ResultFeature> consumer) {
         variant.getSegments().forEach(s -> consumer.accept(segment(s)));
-        variant.getTieIns().forEach(t -> consumer.accept(tieIn(t)));
-        variant.getReconstructions().forEach(r -> consumer.accept(reconstruction(r)));
         variant.getChambers().forEach(c -> consumer.accept(chamber(c)));
-        variant.getChamberReconstructions().forEach(c -> consumer.accept(chamberReconstruction(c)));
         variant.getTechnicalNodes().forEach(n -> consumer.accept(technicalNode(n)));
-        variant.getDepthCrossings().forEach(c -> consumer.accept(depthCrossing(c, variant)));
         consumer.accept(summary(variant.getSummary()));
     }
 
-    // --- 10.1 участок новой тепловой сети ---------------------------------------------
+    /**
+     * То же плюс пересечения по глубине. Этот обход идёт в базу и дальше в интерфейс:
+     * на защите пересечения показывают на продольном профиле, и без них панель глубины
+     * собрать не из чего. В выходной файл такие объекты не попадают — там состав
+     * ровно по разделу 7.1.
+     */
+    public void forEachWithDiagnostics(CalculationVariant variant,
+                                       Consumer<ResultFeature> consumer) {
+        forEach(variant, consumer);
+        variant.getDepthCrossings().forEach(c -> consumer.accept(depthCrossing(c, variant)));
+    }
+
+    /** Типы объектов, которые приложение разрешает в выходном файле (раздел 7.1). */
+    public static java.util.Set<String> exportedObjectTypes() {
+        return java.util.Set.of("heat_network", "heat_chamber", "technical_node",
+                "variant_summary");
+    }
+
+    // --- 7.2 участок новой тепловой сети ----------------------------------------------
     public ResultFeature segment(NewSegment s) {
         Map<String, Object> p = new LinkedHashMap<>();
         p.put("id", s.getId());
@@ -83,64 +101,22 @@ public class ResultFeatureFactory {
         return new ResultFeature("heat_network", s.getId(), toWgs(s.getGeometry()), p);
     }
 
-    // --- 10.2 точка врезки --------------------------------------------------------------
-    public ResultFeature tieIn(TieInResult t) {
-        Map<String, Object> p = new LinkedHashMap<>();
-        p.put("id", t.getId());
-        p.put("object_type", "tie_in");
-        p.put("variant_id", t.getVariantId());
-        p.put("existing_object_id", t.getExistingObjectId());
-        p.put("existing_object_type", t.getExistingObjectType());
-        p.put("existing_diameter", t.getExistingDiameter());
-        p.put("required_diameter", t.getRequiredDiameter());
-        p.put("cost", t.getCost());
-        return new ResultFeature("tie_in", t.getId(), toWgs(t.getLocation()), p);
-    }
-
-    // --- 10.3 реконструируемая часть существующей сети ----------------------------------
-    public ResultFeature reconstruction(ReconstructionResult r) {
-        Map<String, Object> p = new LinkedHashMap<>();
-        p.put("id", r.getId());
-        p.put("object_type", "heat_network_reconstruction");
-        p.put("variant_id", r.getVariantId());
-        p.put("existing_object_id", r.getExistingObjectId());
-        p.put("existing_flow_tph", r.getExistingFlowTph());
-        p.put("added_flow_tph", r.getAddedFlowTph());
-        p.put("calculated_flow_tph", r.getCalculatedFlowTph());
-        p.put("existing_diameter", r.getExistingDiameter());
-        p.put("required_diameter", r.getRequiredDiameter());
-        p.put("length", r.getLength());
-        p.put("cost", r.getCost());
-        return new ResultFeature("heat_network_reconstruction", r.getId(),
-                toWgs(r.getGeometry()), p);
-    }
-
-    // --- 10.4 новая тепловая камера ------------------------------------------------------
+    // --- 7.2 новая тепловая камера --------------------------------------------------------
     public ResultFeature chamber(NewChamberResult c) {
         Map<String, Object> p = new LinkedHashMap<>();
         p.put("id", c.getId());
         p.put("object_type", "heat_chamber");
         p.put("variant_id", c.getVariantId());
         p.put("diameter", c.getDiameter());
+        // Свойство сверх обязательного состава — приложение такие разрешает и при
+        // проверке игнорирует. Здесь оно по делу: правило четырёх примыканий проверяют
+        // по этому числу, и ведомость печатает его же.
+        p.put("degree", c.getDegree());
         p.put("cost", c.getCost());
         return new ResultFeature("heat_chamber", c.getId(), toWgs(c.getLocation()), p);
     }
 
-    // --- 10.5 реконструируемая существующая камера ---------------------------------------
-    public ResultFeature chamberReconstruction(ChamberReconstructionResult c) {
-        Map<String, Object> p = new LinkedHashMap<>();
-        p.put("id", c.getId());
-        p.put("object_type", "heat_chamber_reconstruction");
-        p.put("variant_id", c.getVariantId());
-        p.put("existing_object_id", c.getExistingObjectId());
-        p.put("existing_diameter", c.getExistingDiameter());
-        p.put("required_diameter", c.getRequiredDiameter());
-        p.put("cost", c.getCost());
-        return new ResultFeature("heat_chamber_reconstruction", c.getId(),
-                toWgs(c.getLocation()), p);
-    }
-
-    // --- 10.6 технический узел ------------------------------------------------------------
+    // --- 7.2 технический узел -------------------------------------------------------------
     public ResultFeature technicalNode(TechnicalNodeResult n) {
         Map<String, Object> p = new LinkedHashMap<>();
         p.put("id", n.getId());
@@ -152,10 +128,10 @@ public class ResultFeatureFactory {
     /**
      * Пересечение с существующей коммуникацией по глубине.
      * <p>
-     * Тип выходного объекта сверх раздела 10 ТП: его требует раздел 7 приложения
-     * по глубине — «места пересечений с указанием прохождения сверху или снизу»
-     * и «расчётные вертикальные расстояния». В плоской задаче такие объекты
-     * не выгружаются вовсе.
+     * Тип объекта сверх раздела 7.1 ТП, и поэтому он живёт только внутри сервиса:
+     * в базе и в интерфейсе. В выходной файл не попадает. Смысл в нём остался —
+     * показать, где трасса проходит над коммуникацией, а где под ней, и с каким
+     * просветом. В плоской задаче таких объектов не бывает вовсе.
      */
     public ResultFeature depthCrossing(ru.lct.heatroute.depth.UtilityCrossing c,
                                        ru.lct.heatroute.domain.result.CalculationVariant variant) {
@@ -185,7 +161,7 @@ public class ResultFeatureFactory {
         return Math.round(v * 100d) / 100d;
     }
 
-    // --- 10.7 сводная запись варианта ------------------------------------------------------
+    // --- 7.2 сводная запись варианта ------------------------------------------------------
     public ResultFeature summary(VariantSummary s) {
         Map<String, Object> p = new LinkedHashMap<>();
         p.put("id", s.getId());
@@ -194,14 +170,11 @@ public class ResultFeatureFactory {
         p.put("rank", s.getRank());
         p.put("construction_cost", s.getConstructionCost());
         p.put("chamber_construction_cost", s.getChamberConstructionCost());
-        p.put("tie_in_cost", s.getTieInCost());
-        p.put("reconstruction_cost", s.getReconstructionCost());
-        p.put("chamber_reconstruction_cost", s.getChamberReconstructionCost());
+        p.put("existing_chamber_tie_in_count", s.getExistingChamberTieInCount());
+        p.put("existing_chamber_tie_in_cost", s.getExistingChamberTieInCost());
         p.put("unconnected_penalty", s.getUnconnectedPenalty());
         p.put("calculated_cost", s.getCalculatedCost());
         p.put("new_network_length", s.getNewNetworkLength());
-        p.put("reconstruction_length", s.getReconstructionLength());
-        p.put("length", s.getLength());
         p.put("score", s.getScore());
         p.put("unconnected_oks_ids", s.getUnconnectedOksIds());
         return new ResultFeature("variant_summary", s.getId(), null, p);

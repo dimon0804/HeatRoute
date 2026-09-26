@@ -78,7 +78,7 @@ export function ZonesPanel({
                 <button
                   type="button"
                   onClick={() => onRemove(index)}
-                  className="text-[11.5px] text-muted underline hover:text-tie"
+                  className="text-[11.5px] text-muted underline hover:text-alert"
                 >
                   убрать
                 </button>

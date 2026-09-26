@@ -38,7 +38,7 @@ import java.util.stream.Collectors;
  * описывает полный атрибутивный состав, конкурсный набор 2026 года прислал его
  * частично: без {@code upstream_object_id}, без {@code flow_tph} у существующей сети,
  * без полигонов {@code oks_future}, с целочисленными идентификаторами вместо строковых
- * и с типами ограничений, которых нет в таблице 5.1 дословно. Алгоритм ниже по стеку
+ * и с типами ограничений, которых нет в таблице 2 дословно. Алгоритм ниже по стеку
  * об этом не знает — он получает заполненную модель и протокол принятых допущений.
  */
 @Slf4j
@@ -51,13 +51,16 @@ public class SceneAssembler {
     private final ReferenceCatalog catalog;
     private final TopologyResolver topologyResolver;
     private final IngestProperties props;
+    private final ru.lct.heatroute.geo.GeoProperties geoProps;
 
     public SceneAssembler(ReferenceCatalog catalog,
                           TopologyResolver topologyResolver,
-                          IngestProperties props) {
+                          IngestProperties props,
+                          ru.lct.heatroute.geo.GeoProperties geoProps) {
         this.catalog = catalog;
         this.topologyResolver = topologyResolver;
         this.props = props;
+        this.geoProps = geoProps;
     }
 
     /** Промежуточный накопитель: заполняется парсером по одному объекту. */
@@ -110,9 +113,9 @@ public class SceneAssembler {
      * <p>
      * Расхода существующих участков в конкурсном наборе нет, и принятое значение —
      * самое влиятельное допущение всего решения: от него зависит, какие участки
-     * попадут под реконструкцию. Поэтому его должно быть можно проверить, не меняя
+     * влияет только на исследовательский режим. Поэтому его должно быть можно менять,
      * конфигурацию сервиса: посчитать при нулевом расходе и при половине пропускной
-     * способности и сравнить объём реконструкции.
+     * не пересобирая сервис.
      *
      * @param mode     режим или {@code null}, чтобы взять из конфигурации
      * @param fraction доля пропускной способности или {@code null} — из конфигурации
@@ -286,13 +289,13 @@ public class SceneAssembler {
         }
         if (!nonTableDn.isEmpty()) {
             diag.warning("segment.nonTableDiameter", String.format(
-                    "Условный диаметр %d участков отсутствует в таблице 4.1; "
+                    "Условный диаметр %d участков отсутствует в таблице 1; "
                             + "при расчёте берётся ближайший больший табличный", nonTableDn.size()), nonTableDn);
         }
         if (!noFlow.isEmpty()) {
             diag.assumption("segment.noFlow", String.format(
                     "У %d участков существующей сети нет атрибута flow_tph. Принят режим %s: "
-                            + "%s. Объём реконструкции рассчитан исходя из этого допущения",
+                            + "%s. В обязательном расчёте это значение не используется: резерв существующей сети по разделу 2.4 приложения не определяется",
                     noFlow.size(), assumption.mode, assumption.describe()), noFlow);
         }
         return out;
@@ -347,9 +350,21 @@ public class SceneAssembler {
                 ExistingSegment::getId, s -> s, (a, b) -> a));
         List<ExistingChamber> out = new ArrayList<>(chambers.size());
         List<String> inferredDn = new ArrayList<>();
+        List<String> transitDegree = new ArrayList<>();
 
         for (ExistingChamber ch : chambers) {
             int degree = topology.chamberDegree(ch.getId());
+            if (degree == 0) {
+                // Камера не совпала с концом ни одного участка, но может стоять на оси
+                // существующей линии, которую во входных данных не разделили. Разъяснение
+                // №12: проходящая через камеру линия занимает два примыкания. Из четырёх
+                // мест свободны тогда два, а не четыре, и не учесть это — значит
+                // разрешить лишние врезки.
+                if (liesOnSegment(ch, segments)) {
+                    degree = 2;
+                    transitDegree.add(ch.getId());
+                }
+            }
             int dn = ch.getDiameter();
             boolean inferred = false;
             if (dn <= 0) {
@@ -375,13 +390,39 @@ public class SceneAssembler {
                     .withUpstreamObjectId(upstream != null ? upstream : ch.getUpstreamObjectId())
                     .withUpstreamInferred(ch.getUpstreamObjectId() == null && upstream != null));
         }
+        if (!transitDegree.isEmpty()) {
+            diag.assumption("chamber.transitDegree", String.format(
+                    "У %d тепловых камер нет примыкающих концов участков, но они стоят на оси "
+                            + "существующей линии; принято, что проходящая линия занимает "
+                            + "два примыкания из четырёх (разъяснение №12)",
+                    transitDegree.size()), transitDegree);
+        }
         if (!inferredDn.isEmpty()) {
             diag.assumption("chamber.diameterInferred", String.format(
                     "У %d тепловых камер нет атрибута diameter; исходный условный диаметр принят "
-                            + "равным наибольшему ДУ примыкающих существующих участков (раздел 8.2 ТП)",
+                            + "равным наибольшему ДУ примыкающих существующих участков (раздел 3.2 ТП)",
                     inferredDn.size()), inferredDn);
         }
         return out;
+    }
+
+    /**
+     * Стоит ли камера на оси существующего участка. Допуск тот же, по которому камеры
+     * сопоставляются с узлами сети: если камера не попала в узел, но лежит на линии,
+     * значит линия сквозная.
+     */
+    private boolean liesOnSegment(ExistingChamber chamber, List<ExistingSegment> segments) {
+        double tolerance = geoProps.getSnapTolerance();
+        Coordinate location = chamber.getLocation().getCoordinate();
+        for (ExistingSegment segment : segments) {
+            if (segment.getGeometry() == null) {
+                continue;
+            }
+            if (Geo.distance(segment.getGeometry(), location) <= tolerance) {
+                return true;
+            }
+        }
+        return false;
     }
 
     // =================================================================================
@@ -452,6 +493,7 @@ public class SceneAssembler {
                     .footprint(polygon.geometry())
                     .connectionPoint(p)
                     .connectionPointId(requireId(chosen, "oks_connection_point", diag))
+                    .rawConnectionPointId(chosen.properties().get("id"))
                     .flowTph(flow)
                     .heatLoad(polygon.num("heat_load").orElse(null))
                     .flowSource(flow > 0 ? FutureOks.FlowSource.OKS_FUTURE
@@ -470,20 +512,17 @@ public class SceneAssembler {
                 continue;
             }
             String oksId = pointFeature.str("oks_id");
-            RawFeature polygon = null;
 
+            // Сюда попадают точки, для которых полигона во входных данных нет: точки
+            // со своим полигоном разобраны выше. Раньше здесь оставался блок чтения
+            // расхода с полигона, недостижимый по построению; он удалён. По разъяснению
+            // №4 связь точки с полигоном ОКС вообще не требуется: точка — самостоятельная
+            // цель со своим flow_tph.
             Double flow = null;
             FutureOks.FlowSource flowSource = null;
-            Double heatLoad = null;
+            Double heatLoad = pointFeature.num("heat_load").orElse(null);
 
-            if (polygon != null) {
-                flow = polygon.num("flow_tph").orElse(null);
-                heatLoad = polygon.num("heat_load").orElse(null);
-                if (flow != null) {
-                    flowSource = FutureOks.FlowSource.OKS_FUTURE;
-                }
-            }
-            if (flow == null && props.isAllowFlowOnConnectionPoint()) {
+            if (props.isAllowFlowOnConnectionPoint()) {
                 flow = pointFeature.num("flow_tph").orElse(null);
                 if (flow != null) {
                     flowSource = FutureOks.FlowSource.CONNECTION_POINT;
@@ -495,15 +534,17 @@ public class SceneAssembler {
                 flowSource = FutureOks.FlowSource.ASSUMED_ZERO;
                 noFlow.add(pointId);
             }
-            if (oksId != null && polygon == null && !c.oksFuture.isEmpty()) {
+            // Точка ссылается на ОКС, а полигона с таким идентификатором в наборе нет.
+            // На расчёт это не влияет, но в протоколе должно быть видно.
+            if (oksId != null && !c.oksFuture.isEmpty()) {
                 orphanPoints.add(pointId + "->" + oksId);
             }
 
             out.add(FutureOks.builder()
                     .id(oksId != null ? oksId : pointId)
-                    .footprint(polygon == null ? null : polygon.geometry())
                     .connectionPoint(p)
                     .connectionPointId(pointId)
+                    .rawConnectionPointId(pointFeature.properties().get("id"))
                     .flowTph(flow)
                     .heatLoad(heatLoad)
                     .flowSource(flowSource)
@@ -526,6 +567,9 @@ public class SceneAssembler {
                             .footprint(footprint)
                             .connectionPoint(Geo.point(near[0]))
                             .connectionPointId(e.getKey() + ":derived")
+                            // Точка выведена нами, во входных данных её не было:
+                            // отдавать наружу как «идентификатор из входа» нечего.
+                            .rawConnectionPointId(e.getKey() + ":derived")
                             .flowTph(flow)
                             .heatLoad(e.getValue().num("heat_load").orElse(null))
                             .flowSource(flow > 0 ? FutureOks.FlowSource.OKS_FUTURE
@@ -638,7 +682,7 @@ public class SceneAssembler {
 
         if (unknownTypeCount > 0) {
             diag.warning("restriction.unknownType", String.format(
-                    "Типов ограничений вне таблицы 5.1: %d. Применено правило по умолчанию "
+                    "Типов ограничений вне таблицы 2: %d. Применено правило по умолчанию "
                             + "(обход с минимальным расстоянием). Сопоставление настраивается ключом "
                             + "heatroute.reference.restriction-aliases без изменения кода",
                     unknownTypeCount), unknownTypes);
@@ -658,7 +702,7 @@ public class SceneAssembler {
     public static final String TIE_IN_OWNER = "tie-in";
 
     /**
-     * Существующая тепловая сеть как пространственное ограничение (таблица 5.1 ТП):
+     * Существующая тепловая сеть как пространственное ограничение (таблица 2 ТП):
      * пересечение допускается специальным проходом с коэффициентом 1,05, а идти рядом
      * ближе одного метра нельзя.
      * <p>
@@ -686,7 +730,7 @@ public class SceneAssembler {
         }
         diag.info("restriction.existingNetwork", String.format(
                 "Существующая тепловая сеть учтена как объект со специальным проходом "
-                        + "по таблице 5.1: %d участков, пересечение с коэффициентом %.2f, "
+                        + "по таблице 2: %d участков, пересечение с коэффициентом %.2f, "
                         + "минимальное расстояние при прохождении рядом %.1f м",
                 segments.size(),
                 catalog.ruleFor(ObjectType.HEAT_NETWORK.code()).getKSpecial(),

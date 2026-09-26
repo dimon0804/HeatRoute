@@ -7,7 +7,7 @@ import lombok.Value;
 import java.util.List;
 import java.util.Map;
 
-/** Сводная запись варианта — состав раздела 10.7 ТП. */
+/** Сводная запись варианта — состав раздела 7.2 ТП в редакции от 18.09. */
 @Value
 @Builder
 @Schema(description = "Итоговые показатели варианта")
@@ -16,20 +16,17 @@ public class VariantSummaryDto {
     @Schema(description = "Место в ранжировании, 1 — лучший", example = "1")
     int rank;
 
-    @Schema(description = "Стоимость новых участков тепловой сети, руб.")
+    @Schema(description = "Стоимость строительства: участки, новые камеры и врезки, руб.")
     double constructionCost;
 
     @Schema(description = "Стоимость строительства новых тепловых камер, руб.")
     double chamberConstructionCost;
 
-    @Schema(description = "Суммарная стоимость врезок, руб.")
-    double tieInCost;
+    @Schema(description = "Количество врезок в существующие тепловые камеры")
+    int existingChamberTieInCount;
 
-    @Schema(description = "Стоимость реконструкции существующих линейных участков, руб.")
-    double reconstructionCost;
-
-    @Schema(description = "Стоимость реконструкции существующих камер, руб.")
-    double chamberReconstructionCost;
+    @Schema(description = "Стоимость врезок в существующие тепловые камеры, руб.")
+    double existingChamberTieInCost;
 
     @Schema(description = "Штраф за неподключенные ОКС, руб.")
     double unconnectedPenalty;
@@ -37,21 +34,15 @@ public class VariantSummaryDto {
     @Schema(description = "Итоговая стоимость варианта, руб.")
     double calculatedCost;
 
-    @Schema(description = "Суммарная длина новых линейных участков, м")
+    @Schema(description = "Суммарная длина новых участков тепловой сети, м")
     double newNetworkLength;
 
-    @Schema(description = "Суммарная длина реконструируемых частей, м")
-    double reconstructionLength;
-
-    @Schema(description = "Новая сеть плюс реконструкция, м")
-    double length;
-
-    @Schema(description = "Показатель ранжирования по разделу 9 ТП", example = "17.535")
+    @Schema(description = "Показатель ранжирования по разделу 6 ТП", example = "8.412")
     double score;
 
-    @Schema(description = "ID перспективных ОКС, для которых маршрут не найден автоматически")
-    List<String> unconnectedOksIds;
+    @Schema(description = "ID точек подключения, для которых маршрут не найден")
+    List<Object> unconnectedOksIds;
 
-    @Schema(description = "Почему каждый ОКС остался без подключения: идентификатор → причина")
+    @Schema(description = "Почему каждая точка осталась без подключения: идентификатор → причина")
     Map<String, String> unconnectedReasons;
 }

@@ -4,7 +4,7 @@ export default {
   theme: {
     extend: {
       colors: {
-        // Палитра карты: цвета слоёв заданы здесь и в lib/layers.ts одними значениями,
+        // Палитра карты: цвета слоёв заданы здесь и в lib/mapStyle.ts одними значениями,
         // чтобы легенда и карта не разъезжались.
         ink: '#0f1720',
         panel: '#151d28',
@@ -13,8 +13,8 @@ export default {
         accent: '#4da3ff',
         existing: '#6b7d91',
         proposed: '#ff8a3d',
-        recon: '#ffd23f',
-        tie: '#ff4d6d',
+        warn: '#ffd23f',
+        alert: '#ff4d6d',
         chamber: '#4da3ff',
         oks: '#3ddc97',
       },

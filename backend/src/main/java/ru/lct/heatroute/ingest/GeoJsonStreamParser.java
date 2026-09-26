@@ -180,7 +180,7 @@ public class GeoJsonStreamParser {
 
     private Geometry readGeometry(JsonParser p) throws IOException {
         if (p.currentToken() == JsonToken.VALUE_NULL) {
-            // Сводная запись варианта приходит с geometry = null (раздел 10.7 ТП).
+            // Сводная запись варианта приходит с geometry = null (раздел 7.1 ТП).
             return null;
         }
         if (p.currentToken() != JsonToken.START_OBJECT) {

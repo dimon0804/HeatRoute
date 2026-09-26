@@ -27,13 +27,18 @@ import java.util.Set;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
- * Контракт выходного файла (раздел 10 ТП).
+ * Контракт выходного файла (раздел 7 ТП в редакции от 18.09).
  * <p>
- * Проверяется то, что эксперт проверит первым делом, открыв выгрузку: у каждого типа
- * ровно свой обязательный набор атрибутов без чужих полей со значением {@code null},
- * на каждый вариант ровно одна сводная запись с {@code geometry = null}, координаты
- * вернулись в WGS 84, ссылки между объектами разрешаются. Отдельно проверяется, что
- * собственный парсер читает собственную выгрузку — контракт замкнут.
+ * Проверяется то, что эксперт проверит первым делом, открыв выгрузку: в файле только
+ * разрешённые типы объектов, у каждого типа ровно свой обязательный набор атрибутов
+ * без чужих полей со значением {@code null}, на каждый вариант ровно одна сводная
+ * запись с {@code geometry = null}, координаты вернулись в WGS 84, ссылки между
+ * объектами разрешаются. Отдельно проверяется, что собственный парсер читает
+ * собственную выгрузку — контракт замкнут.
+ * <p>
+ * Типов ровно четыре. Точки врезки и объекты реконструкции из приложения ушли,
+ * а пересечения по глубине приложением не предусмотрены вовсе: они остаются внутри
+ * сервиса, доходят до базы и интерфейса и в файл не попадают.
  */
 @SpringBootTest
 @ActiveProfiles("nodb")
@@ -50,33 +55,20 @@ class GeoJsonResultWriterTest {
 
     private static final ObjectMapper MAPPER = new ObjectMapper();
 
-    /** Обязательный состав атрибутов по таблицам разделов 10.1–10.7 ТП. */
+    /** Обязательный состав атрибутов по таблицам раздела 7.2 ТП. */
     private static final Map<String, Set<String>> REQUIRED = new LinkedHashMap<>();
 
     static {
         REQUIRED.put("heat_network", Set.of("id", "object_type", "variant_id",
                 "start_node_id", "end_node_id", "flow_tph", "diameter", "length",
                 "laying_method", "depth_start", "depth_end", "cost"));
-        REQUIRED.put("tie_in", Set.of("id", "object_type", "variant_id",
-                "existing_object_id", "existing_object_type", "existing_diameter",
-                "required_diameter", "cost"));
-        REQUIRED.put("heat_network_reconstruction", Set.of("id", "object_type", "variant_id",
-                "existing_object_id", "existing_flow_tph", "added_flow_tph",
-                "calculated_flow_tph", "existing_diameter", "required_diameter",
-                "length", "cost"));
         REQUIRED.put("heat_chamber", Set.of("id", "object_type", "variant_id",
                 "diameter", "cost"));
-        REQUIRED.put("heat_chamber_reconstruction", Set.of("id", "object_type", "variant_id",
-                "existing_object_id", "existing_diameter", "required_diameter", "cost"));
         REQUIRED.put("technical_node", Set.of("id", "object_type", "variant_id"));
-        // Сверх раздела 10 ТП: требование раздела 7 приложения по глубине.
-        REQUIRED.put("depth_crossing", Set.of("id", "object_type", "variant_id", "segment_id",
-                "utility_id", "utility_type", "passage", "new_depth", "utility_depth",
-                "required_clearance", "actual_clearance"));
         REQUIRED.put("variant_summary", Set.of("id", "object_type", "variant_id", "rank",
-                "construction_cost", "chamber_construction_cost", "tie_in_cost",
-                "reconstruction_cost", "chamber_reconstruction_cost", "unconnected_penalty",
-                "calculated_cost", "new_network_length", "reconstruction_length", "length",
+                "construction_cost", "chamber_construction_cost",
+                "existing_chamber_tie_in_count", "existing_chamber_tie_in_cost",
+                "unconnected_penalty", "calculated_cost", "new_network_length",
                 "score", "unconnected_oks_ids"));
     }
 
@@ -120,7 +112,40 @@ class GeoJsonResultWriterTest {
     }
 
     @Test
-    @DisplayName("У каждого типа ровно свой обязательный набор атрибутов")
+    @DisplayName("В файле встречаются только четыре разрешённых типа объектов")
+    void onlyAllowedObjectTypes() throws Exception {
+        JsonNode root = exported();
+
+        Set<String> actual = new LinkedHashSet<>();
+        for (JsonNode feature : root.get("features")) {
+            actual.add(feature.get("properties").get("object_type").asText());
+        }
+
+        // Раздел 7.1 перечисляет ровно четыре типа. Дополнительные свойства приложение
+        // разрешает и при проверке игнорирует, а лишних типов объектов не предусматривает.
+        assertThat(actual)
+                .as("состав типов выходного файла")
+                .isSubsetOf(ResultFeatureFactory.exportedObjectTypes())
+                .contains("heat_network", "heat_chamber", "variant_summary");
+
+        // Врезки и реконструкция стали внутренними записями расчёта, а пересечения
+        // по глубине приложением не предусмотрены: все три в файл не попадают.
+        assertThat(actual).doesNotContain("tie_in", "heat_network_reconstruction",
+                "heat_chamber_reconstruction", "depth_crossing");
+    }
+
+    /**
+     * Свойства сверх обязательного состава. Раздел 7.2 ТП их разрешает и при проверке
+     * обязательной части игнорирует, но появляться они должны осознанно, а не как
+     * след забытой правки. Поэтому каждое перечислено здесь поимённо.
+     */
+    private static final Map<String, Set<String>> OPTIONAL = Map.of(
+            // Число примыкающих участков: по нему проверяют правило четырёх примыканий,
+            // и его же печатает ведомость объёмов работ.
+            "heat_chamber", Set.of("degree"));
+
+    @Test
+    @DisplayName("У каждого типа есть весь обязательный набор атрибутов и ничего лишнего")
     void attributeSetsAreExact() throws Exception {
         JsonNode root = exported();
         for (JsonNode feature : root.get("features")) {
@@ -133,9 +158,16 @@ class GeoJsonResultWriterTest {
             props.fieldNames().forEachRemaining(actual::add);
 
             assertThat(actual)
-                    .as("состав атрибутов объекта %s типа %s",
+                    .as("обязательные атрибуты объекта %s типа %s",
                             props.get("id").asText(), type)
-                    .containsExactlyInAnyOrderElementsOf(required);
+                    .containsAll(required);
+
+            Set<String> extra = new LinkedHashSet<>(actual);
+            extra.removeAll(required);
+            assertThat(extra)
+                    .as("необъявленные свойства сверх состава у объекта %s типа %s",
+                            props.get("id").asText(), type)
+                    .isSubsetOf(OPTIONAL.getOrDefault(type, Set.of()));
         }
     }
 
@@ -192,7 +224,6 @@ class GeoJsonResultWriterTest {
             switch (type) {
                 case "heat_chamber":
                 case "technical_node":
-                case "tie_in":
                     nodesByVariant.computeIfAbsent(variant, k -> new LinkedHashSet<>())
                             .add(props.get("id").asText());
                     break;
@@ -208,7 +239,7 @@ class GeoJsonResultWriterTest {
 
         // Конец участка ссылается либо на узел этого же варианта, либо на объект
         // входного файла: точку подключения ОКС и существующую камеру, использованную
-        // под врезку, раздел 10 ТП повторно не выгружает. Поэтому разрешение идёт
+        // под врезку, раздел 7 ТП повторно не выгружает. Поэтому разрешение идёт
         // против объединения выходных узлов и входных идентификаторов.
         Set<String> fromInput = new LinkedHashSet<>();
         scene.getChambers().forEach(ch -> fromInput.add(ch.getId()));

@@ -4,7 +4,7 @@ import lombok.Builder;
 import lombok.Value;
 import org.locationtech.jts.geom.LineString;
 
-/** Участок новой тепловой сети (раздел 10.1 ТП). */
+/** Участок новой тепловой сети (раздел 7.2 ТП). */
 @Value
 @Builder(toBuilder = true)
 public class NewSegment {

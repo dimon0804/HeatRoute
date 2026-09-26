@@ -29,11 +29,16 @@ import static org.assertj.core.api.Assertions.assertThat;
 /**
  * Инженерная осмысленность построенной сети.
  * <p>
- * Тесты этого класса ловят не нарушения буквы технического приложения, а решения,
- * которые эксперт назовёт ошибкой проектирования, даже если формально правила
- * соблюдены: труба, ведущая в никуда; участок с нулевым расходом; ветвь, в которой
- * диаметр растёт по мере удаления от источника; предельная длина непрерывной части
- * одного диаметра.
+ * Тесты этого класса ловят решения, которые эксперт назовёт ошибкой проектирования:
+ * труба, ведущая в никуда; участок с нулевым расходом; ветвь, в которой диаметр растёт
+ * по мере удаления от места присоединения; путь, выходящий за предельную длину своего
+ * условного диаметра.
+ * <p>
+ * Здесь же собраны инварианты, которые редакция приложения от 18.09 сделала
+ * обязательными: монотонность условного диаметра по направлению от точки подключения
+ * к месту присоединения, предельная длина по каждому пути отдельно и правило оплаты
+ * врезок. Все они проверяются по выгруженному результату на конкурсном наборе —
+ * так же, как это сделает проверяющий.
  */
 @SpringBootTest
 @ActiveProfiles("nodb")
@@ -119,73 +124,111 @@ class NetworkSanityTest {
     }
 
     @Test
-    @DisplayName("По направлению к источнику условный диаметр не уменьшается")
-    void diameterDoesNotDecreaseTowardsSource() throws Exception {
+    @DisplayName("От точки подключения к месту присоединения условный диаметр не уменьшается")
+    void diameterDoesNotDecreaseTowardsTieIn() throws Exception {
         VariantPlanner.Plan p = plan();
 
         for (CalculationVariant v : p.getVariants()) {
-            // Дерево восстанавливается по ссылкам участков: у каждого узла один
-            // участок к источнику и остальные от него.
-            Map<String, List<NewSegment>> outgoing = new LinkedHashMap<>();
-            for (NewSegment s : v.getSegments()) {
-                outgoing.computeIfAbsent(s.getStartNodeId(), k -> new ArrayList<>()).add(s);
-            }
+            // Дерево восстанавливается по ссылкам участков: корни — места присоединения,
+            // участки направлены от них к точкам подключения.
+            Map<String, List<NewSegment>> outgoing = outgoing(v);
 
-            for (NewSegment upstream : v.getSegments()) {
-                for (NewSegment downstream : outgoing.getOrDefault(upstream.getEndNodeId(), List.of())) {
-                    // Расход вниз по течению не больше, значит и диаметр не должен расти.
-                    if (downstream.getFlowTph() > upstream.getFlowTph() + 1e-6) {
-                        continue;   // развилка с обратным направлением — пропускаем
-                    }
-                    assertThat(downstream.getDiameter())
-                            .as("участок %s (ДУ %d, расход %.2f) идёт от %s (ДУ %d, расход %.2f): "
-                                            + "диаметр растёт при удалении от источника",
-                                    downstream.getId(), downstream.getDiameter(),
-                                    downstream.getFlowTph(), upstream.getId(),
-                                    upstream.getDiameter(), upstream.getFlowTph())
-                            .isLessThanOrEqualTo(upstream.getDiameter());
+            for (NewSegment nearer : v.getSegments()) {
+                for (NewSegment further
+                        : outgoing.getOrDefault(nearer.getEndNodeId(), List.of())) {
+                    // Раздел 2.3 в редакции от 18.09 формулирует это как безусловный
+                    // инвариант: исключений по расходу у него нет. Идя от потребителя
+                    // к месту присоединения, диаметр только растёт или остаётся прежним.
+                    assertThat(further.getDiameter())
+                            .as("участок %s (ДУ %d, расход %.2f) удалён от места присоединения "
+                                            + "дальше, чем %s (ДУ %d, расход %.2f), "
+                                            + "но толще него",
+                                    further.getId(), further.getDiameter(),
+                                    further.getFlowTph(), nearer.getId(),
+                                    nearer.getDiameter(), nearer.getFlowTph())
+                            .isLessThanOrEqualTo(nearer.getDiameter());
                 }
             }
         }
     }
 
     @Test
-    @DisplayName("Предельная длина непрерывной части одного диаметра соблюдена")
-    void continuousRunWithinLimit() throws Exception {
+    @DisplayName("Предельная длина выдержана на каждом пути от присоединения до потребителя")
+    void runLengthLimitOnEveryPath() throws Exception {
         VariantPlanner.Plan p = plan();
 
         for (CalculationVariant v : p.getVariants()) {
-            Map<String, List<NewSegment>> outgoing = new LinkedHashMap<>();
-            for (NewSegment s : v.getSegments()) {
-                outgoing.computeIfAbsent(s.getStartNodeId(), k -> new ArrayList<>()).add(s);
+            Map<String, List<NewSegment>> outgoing = outgoing(v);
+            List<List<NewSegment>> paths = new ArrayList<>();
+            for (String root : roots(v, outgoing)) {
+                collectPaths(outgoing, root, new ArrayList<>(), paths);
             }
-            Set<String> starts = new LinkedHashSet<>(outgoing.keySet());
-            v.getSegments().forEach(s -> starts.remove(s.getEndNodeId()));
 
-            // Обход от корней с накоплением длины непрерывной части одного диаметра.
-            // Смена диаметра начинает новый отсчёт, камера — нет (раздел 3 ТП).
-            for (String root : starts) {
-                Deque<Object[]> stack = new ArrayDeque<>();
-                outgoing.getOrDefault(root, List.of())
-                        .forEach(s -> stack.push(new Object[]{s, 0d}));
+            assertThat(paths)
+                    .as("вариант %s: путей от мест присоединения не нашлось вовсе",
+                            v.getVariantId())
+                    .isNotEmpty();
 
-                while (!stack.isEmpty()) {
-                    Object[] frame = stack.pop();
-                    NewSegment segment = (NewSegment) frame[0];
-                    double carried = (Double) frame[1];
+            // Раздел 2.3: предел проверяется по каждому непрерывному пути отдельно.
+            // Общий ствол входит в каждый путь — он и получается заново пройденным
+            // при переборе путей; длины параллельных ветвей между собой не
+            // складываются, потому что каждый путь считается сам по себе.
+            // Камера и технический узел отсчёт не прерывают, смена ДУ — прерывает.
+            for (List<NewSegment> path : paths) {
+                double run = 0;
+                int currentDn = 0;
+                for (NewSegment segment : path) {
+                    run = segment.getDiameter() == currentDn ? run + segment.getLength()
+                            : segment.getLength();
+                    currentDn = segment.getDiameter();
 
-                    double run = carried + segment.getLength();
-                    double limit = catalog.maxRunLength(segment.getDiameter());
+                    double limit = catalog.maxRunLength(currentDn);
                     assertThat(run)
-                            .as("непрерывная часть ДУ %d достигла %.1f м при пределе %.0f м "
-                                            + "(участок %s)",
-                                    segment.getDiameter(), run, limit, segment.getId())
+                            .as("вариант %s, путь до %s: непрерывная часть ДУ %d достигла "
+                                            + "%.1f м при пределе %.0f м (участок %s)",
+                                    v.getVariantId(),
+                                    path.get(path.size() - 1).getEndNodeId(),
+                                    currentDn, run, limit, segment.getId())
                             .isLessThanOrEqualTo(limit + 0.5);
+                }
+            }
+        }
+    }
 
-                    for (NewSegment next : outgoing.getOrDefault(segment.getEndNodeId(), List.of())) {
-                        double carryOn = next.getDiameter() == segment.getDiameter() ? run : 0;
-                        stack.push(new Object[]{next, carryOn});
-                    }
+    @Test
+    @DisplayName("Врезка стоит 5 млн за участок в существующей камере и ноль при новой")
+    void tieInCostFollowsExistingChamberRule() throws Exception {
+        VariantPlanner.Plan p = plan();
+
+        for (CalculationVariant v : p.getVariants()) {
+            for (ru.lct.heatroute.domain.result.TieInResult t : v.getTieIns()) {
+                if ("heat_chamber".equals(t.getExistingObjectType())) {
+                    // Считаем по выгруженным участкам, а не по служебному полю: врезка
+                    // по разделу 3.2 — это каждый новый линейный участок, геометрически
+                    // заканчивающийся в существующей камере.
+                    long touching = v.getSegments().stream()
+                            .filter(s -> t.getExistingObjectId().equals(s.getStartNodeId())
+                                    || t.getExistingObjectId().equals(s.getEndNodeId()))
+                            .count();
+                    assertThat(touching)
+                            .as("к существующей камере %s должен примыкать хотя бы один "
+                                            + "новый участок, иначе это не присоединение",
+                                    t.getExistingObjectId())
+                            .isPositive();
+                    assertThat(t.getTieInCount())
+                            .as("присоединение %s к существующей камере %s",
+                                    t.getId(), t.getExistingObjectId())
+                            .isEqualTo((int) touching);
+                    assertThat(t.getCost())
+                            .as("стоимость врезок присоединения %s", t.getId())
+                            .isEqualTo(touching * catalog.tieInCost());
+                } else {
+                    // В месте присоединения строится новая камера: присоединение уже
+                    // входит в её стоимость, отдельной врезки не начисляется.
+                    assertThat(t.getTieInCount())
+                            .as("присоединение %s выполнено новой камерой", t.getId())
+                            .isZero();
+                    assertThat(t.getCost()).isZero();
                 }
             }
         }
@@ -219,7 +262,10 @@ class NetworkSanityTest {
 
             List<String> orphans = new ArrayList<>();
             for (FutureOks oks : scene.getFutureOks()) {
-                if (v.getSummary().getUnconnectedOksIds().contains(oks.getId())) {
+                // Сверяемся по внутренним ключам расчёта: в unconnectedOksIds лежат
+                // идентификаторы в исходном типе входного файла, и на конкурсном
+                // наборе это числа, а не строки.
+                if (v.getSummary().getUnconnectedPointKeys().contains(oks.getId())) {
                     continue;
                 }
                 if (!reachable.contains(oks.getConnectionPointId())) {
@@ -229,6 +275,50 @@ class NetworkSanityTest {
             assertThat(orphans)
                     .as("вариант %s: точки подключения без пути к врезке", v.getVariantId())
                     .isEmpty();
+        }
+    }
+
+    /** Участки, исходящие из каждого узла: дерево направлено от места присоединения. */
+    private static Map<String, List<NewSegment>> outgoing(CalculationVariant v) {
+        Map<String, List<NewSegment>> outgoing = new LinkedHashMap<>();
+        for (NewSegment s : v.getSegments()) {
+            outgoing.computeIfAbsent(s.getStartNodeId(), k -> new ArrayList<>()).add(s);
+        }
+        return outgoing;
+    }
+
+    /** Узлы, в которые не входит ни один участок, — места присоединения к сети. */
+    private static Set<String> roots(CalculationVariant v,
+                                     Map<String, List<NewSegment>> outgoing) {
+        Set<String> starts = new LinkedHashSet<>(outgoing.keySet());
+        v.getSegments().forEach(s -> starts.remove(s.getEndNodeId()));
+        return starts;
+    }
+
+    /**
+     * Все пути от узла до концов ветвей, каждый — своим списком участков.
+     * <p>
+     * Простой путь не может быть длиннее числа участков: если оказался длиннее, в дереве
+     * появился цикл. Обрыв здесь превращает зависание обхода в понятную ошибку.
+     */
+    private static void collectPaths(Map<String, List<NewSegment>> outgoing, String node,
+                                     List<NewSegment> prefix, List<List<NewSegment>> out) {
+        int edges = outgoing.values().stream().mapToInt(List::size).sum();
+        if (prefix.size() > edges) {
+            throw new AssertionError("В сети найден цикл: обход дошёл до узла " + node
+                    + ", пройдя участков больше, чем есть в варианте");
+        }
+        List<NewSegment> next = outgoing.getOrDefault(node, List.of());
+        if (next.isEmpty()) {
+            if (!prefix.isEmpty()) {
+                out.add(new ArrayList<>(prefix));
+            }
+            return;
+        }
+        for (NewSegment segment : next) {
+            prefix.add(segment);
+            collectPaths(outgoing, segment.getEndNodeId(), prefix, out);
+            prefix.remove(prefix.size() - 1);
         }
     }
 }

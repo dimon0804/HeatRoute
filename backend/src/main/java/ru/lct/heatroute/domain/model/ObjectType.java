@@ -21,10 +21,7 @@ public enum ObjectType {
     OKS_EXISTING("oks_existing", Kind.INPUT),
     RESTRICTION("restriction", Kind.INPUT),
 
-    // --- выход (раздел 10) ---
-    TIE_IN("tie_in", Kind.OUTPUT),
-    HEAT_NETWORK_RECONSTRUCTION("heat_network_reconstruction", Kind.OUTPUT),
-    HEAT_CHAMBER_RECONSTRUCTION("heat_chamber_reconstruction", Kind.OUTPUT),
+    // --- выход (раздел 7.1) ---
     TECHNICAL_NODE("technical_node", Kind.OUTPUT),
     VARIANT_SUMMARY("variant_summary", Kind.OUTPUT);
 

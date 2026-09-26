@@ -12,6 +12,8 @@ import ru.lct.heatroute.domain.model.ExistingTopology;
 import ru.lct.heatroute.domain.model.FutureOks;
 import ru.lct.heatroute.domain.model.IngestDiagnostics;
 import ru.lct.heatroute.domain.model.InputScene;
+import ru.lct.heatroute.domain.reference.ReferenceCatalog;
+import ru.lct.heatroute.domain.reference.RestrictionRule;
 
 import java.io.InputStream;
 import java.util.List;
@@ -37,6 +39,8 @@ class SceneIngestTest {
     GeoJsonStreamParser parser;
     @Autowired
     SceneAssembler assembler;
+    @Autowired
+    ReferenceCatalog catalog;
 
     private static InputScene scene;
 
@@ -106,8 +110,10 @@ class SceneIngestTest {
         assertThat(s.getSegments()).allMatch(seg -> seg.getUpstreamObjectId() != null);
         assertThat(s.getSegments()).allMatch(ExistingSegment::isUpstreamInferred);
 
-        // Цепочка от каждого участка обязана заканчиваться источником: иначе
-        // дополнительный расход некуда распространять и реконструкция не считается.
+        // Цепочка от каждого участка обязана заканчиваться источником. В обязательном
+        // расчёте расход по ней больше не распространяется, но связность существующей
+        // сети — это проверка самого разбора: разрыв цепочки означает, что топология
+        // восстановлена неверно, и об этом надо знать до расчёта.
         String sourceId = s.getSource().getId();
         for (ExistingSegment seg : s.getSegments()) {
             List<String> chain = topology.chainToSource(seg.getId());
@@ -129,7 +135,7 @@ class SceneIngestTest {
     }
 
     @Test
-    @DisplayName("Ограничение вне таблицы 5.1 разрешается через псевдоним, а не отбрасывается")
+    @DisplayName("Ограничение вне таблицы 2 разрешается через псевдоним, а не отбрасывается")
     void resolvesRestrictionAliases() throws Exception {
         InputScene s = scene();
         assertThat(s.getRestrictions())
@@ -137,10 +143,56 @@ class SceneIngestTest {
                 .hasSize(85)
                 .allMatch(r -> "oks_existing".equals(r.getCanonicalType()))
                 .allMatch(r -> !r.isUnknownType());
+
+        // С редакции приложения от 18.09 железная дорога — своя строка таблицы 2:
+        // пересечение запрещено, отступ 1 м. Псевдоним на трамвайные пути её правило
+        // подменял и разрешал пересекать специальным проходом за K = 1,75.
         assertThat(s.getRestrictions())
                 .filteredOn(r -> "railway".equals(r.getRawType()))
                 .hasSize(1)
-                .allMatch(r -> "tram_tracks".equals(r.getCanonicalType()));
+                .allMatch(r -> "railway".equals(r.getCanonicalType()))
+                .allMatch(r -> !r.isUnknownType())
+                .allMatch(r -> r.getRule().getRule() == RestrictionRule.FORBIDDEN)
+                .allMatch(r -> r.getRule().getMinHorizontalDist() == 1.0);
+    }
+
+    @Test
+    @DisplayName("Псевдонимы рельсовых и социальных типов ведут каждый к своему правилу")
+    void aliasesLeadToOwnRules() {
+        // Разные написания железной дороги приводят к запрету, трамвайные пути
+        // остаются специальным проходом. Раньше и то и другое сходилось в один тип,
+        // и железную дорогу сервис пересекал.
+        for (String rail : List.of("railway", "railroad", "rail", "railway_track",
+                "metro", "subway")) {
+            assertThat(catalog.canonicalType(rail))
+                    .as("написание «%s» — это железная дорога", rail)
+                    .isEqualTo("railway");
+            assertThat(catalog.ruleFor(rail).getRule())
+                    .as("пересечение железной дороги запрещено, написание «%s»", rail)
+                    .isEqualTo(RestrictionRule.FORBIDDEN);
+        }
+
+        for (String tram : List.of("tram_tracks", "tram", "tramway")) {
+            assertThat(catalog.canonicalType(tram))
+                    .as("написание «%s» — это трамвайные пути", tram)
+                    .isEqualTo("tram_tracks");
+            assertThat(catalog.ruleFor(tram).getRule())
+                    .isEqualTo(RestrictionRule.SPECIAL_CROSSING);
+            assertThat(catalog.ruleFor(tram).getKSpecial()).isEqualTo(1.75);
+        }
+
+        for (String social : List.of("social_area", "school", "kindergarten",
+                "hospital", "clinic")) {
+            assertThat(catalog.canonicalType(social))
+                    .as("написание «%s» — это социально значимая территория", social)
+                    .isEqualTo("social_area");
+            assertThat(catalog.ruleFor(social).getRule())
+                    .isEqualTo(RestrictionRule.FORBIDDEN);
+        }
+
+        // Псевдонимы разрешены справочником, а не признаны неизвестным типом.
+        assertThat(catalog.isKnownType("railroad")).isTrue();
+        assertThat(catalog.isKnownType("kindergarten")).isTrue();
     }
 
     @Test

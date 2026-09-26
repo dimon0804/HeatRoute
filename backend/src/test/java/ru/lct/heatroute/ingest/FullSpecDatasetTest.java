@@ -34,6 +34,11 @@ import static org.assertj.core.api.Assertions.assertThat;
  * достроены {@code upstream_object_id}, расходы существующей сети, диаметры камер,
  * полигоны {@code oks_future} со справочной нагрузкой, ссылки {@code oks_id},
  * тип {@code oks_existing} и строковые идентификаторы.
+ * <p>
+ * Расход существующей сети здесь задан, но на обязательный расчёт он больше не влияет:
+ * реконструкции в расчётной модели нет, и резерв пропускной способности существующей
+ * сети не определяется. Проверять по нему остаётся разбор: атрибут прочитан и ничего
+ * не восстановлено.
  */
 @SpringBootTest
 @ActiveProfiles("nodb")
@@ -76,9 +81,8 @@ class FullSpecDatasetTest {
         CalculationVariant best = plan.getVariants().get(0);
         System.out.printf("вариантов %d | лучший: %s%n",
                 plan.getVariants().size(), best.getDescription());
-        System.out.printf("  новая сеть %.1f м, реконструкция %.1f м, стоимость %,.0f руб., S = %.3f%n",
+        System.out.printf("  новая сеть %.1f м, стоимость %,.0f руб., S = %.3f%n",
                 best.getSummary().getNewNetworkLength(),
-                best.getSummary().getReconstructionLength(),
                 best.getSummary().getCalculatedCost(), best.getSummary().getScore());
         System.out.printf("  не подключено: %s%n", best.getSummary().getUnconnectedOksIds());
         System.out.println("====================================================");
@@ -157,28 +161,6 @@ class FullSpecDatasetTest {
         assertThat(best.getSegments()).isNotEmpty();
         assertThat(best.getTieIns()).isNotEmpty();
         assertThat(best.getSummary().getCalculatedCost()).isPositive();
-    }
-
-    @Test
-    @DisplayName("Заданная загрузка существующей сети приводит к реконструкции")
-    void reconstructionAppears() throws Exception {
-        VariantPlanner.Plan p = plan();
-
-        // В этом наборе существующие участки загружены на 35 % пропускной способности,
-        // поэтому дополнительный расход выводит часть из них за предел, и реконструкция
-        // обязана появиться. На конкурсном наборе расход не задан и принят нулевым —
-        // там реконструкции почти нет, и это следствие данных, а не алгоритма.
-        long withReconstruction = p.getVariants().stream()
-                .filter(v -> !v.getReconstructions().isEmpty())
-                .count();
-        assertThat(withReconstruction)
-                .as("реконструкция существующей сети при заданной её загрузке")
-                .isPositive();
-
-        p.getVariants().forEach(v -> v.getReconstructions().forEach(r -> {
-            assertThat(r.getExistingFlowTph()).isPositive();
-            assertThat(r.getRequiredDiameter()).isGreaterThan(r.getExistingDiameter());
-        }));
     }
 
     @Test

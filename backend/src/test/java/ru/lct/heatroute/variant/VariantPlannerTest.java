@@ -23,10 +23,14 @@ import static org.assertj.core.api.Assertions.assertThat;
 /**
  * Полный расчёт на конкурсном наборе: от разобранного GeoJSON до ранжированных вариантов.
  * <p>
- * Тест проверяет инварианты, которые эксперты проверяют первыми: все ОКС подключены,
- * условные диаметры соответствуют расходам, предельные длины соблюдены, степень камеры
- * не превышает четырёх, стоимость сходится с суммой объектов, показатель ранжирования
- * считается по формуле раздела 9 ТП.
+ * Тест проверяет инварианты, которые эксперты проверяют первыми: все точки подключения
+ * обслужены, условные диаметры соответствуют расходам, предельные длины соблюдены,
+ * степень камеры не превышает четырёх, стоимость сходится с суммой объектов, показатель
+ * ранжирования считается по формуле раздела 6 ТП.
+ * <p>
+ * Состав стоимости с редакции приложения от 18.09 короче: новые участки, новые камеры
+ * и врезки в существующие камеры. Реконструкции существующей сети в расчётной модели
+ * нет, поэтому и в протяжённость показателя входит только новая сеть.
  */
 @SpringBootTest
 @ActiveProfiles("nodb")
@@ -69,18 +73,18 @@ class VariantPlannerTest {
             System.out.println("----------------------------------------------------------");
             System.out.printf("Вариант %s (место %d): %s%n", v.getVariantId(), s.getRank(),
                     v.getDescription());
-            System.out.printf("  участков %d, камер %d, тех. узлов %d, врезок %d, "
-                            + "реконструкция %d частей%n",
+            System.out.printf("  участков %d, камер %d, тех. узлов %d, "
+                            + "присоединений %d, врезок в существующие камеры %d%n",
                     v.getSegments().size(), v.getChambers().size(), v.getTechnicalNodes().size(),
-                    v.getTieIns().size(), v.getReconstructions().size());
-            System.out.printf("  новая сеть %.1f м, реконструкция %.1f м, всего %.1f м%n",
-                    s.getNewNetworkLength(), s.getReconstructionLength(), s.getLength());
-            System.out.printf("  линейные %,.0f + камеры %,.0f + врезки %,.0f + "
-                            + "рек. линии %,.0f + рек. камеры %,.0f + штраф %,.0f = %,.0f руб.%n",
-                    s.getConstructionCost(), s.getChamberConstructionCost(), s.getTieInCost(),
-                    s.getReconstructionCost(), s.getChamberReconstructionCost(),
-                    s.getUnconnectedPenalty(), s.getCalculatedCost());
-            System.out.printf("  S = %.3f | не подключено ОКС: %s%n",
+                    v.getTieIns().size(), s.getExistingChamberTieInCount());
+            System.out.printf("  новая сеть %.1f м%n", s.getNewNetworkLength());
+            System.out.printf("  линейные %,.0f + камеры %,.0f + врезки %,.0f = "
+                            + "строительство %,.0f; штраф %,.0f; итого %,.0f руб.%n",
+                    s.getConstructionCost() - s.getChamberConstructionCost()
+                            - s.getExistingChamberTieInCost(),
+                    s.getChamberConstructionCost(), s.getExistingChamberTieInCost(),
+                    s.getConstructionCost(), s.getUnconnectedPenalty(), s.getCalculatedCost());
+            System.out.printf("  S = %.3f | не подключено точек: %s%n",
                     s.getScore(), s.getUnconnectedOksIds());
         }
         System.out.println("==========================================================");
@@ -148,36 +152,56 @@ class VariantPlannerTest {
         VariantPlanner.Plan p = plan();
         for (CalculationVariant v : p.getVariants()) {
             VariantSummary s = v.getSummary();
-            double sum = s.getConstructionCost() + s.getChamberConstructionCost()
-                    + s.getTieInCost() + s.getReconstructionCost()
-                    + s.getChamberReconstructionCost() + s.getUnconnectedPenalty();
+
+            // Раздел 6: стоимость строительства — это ровно три слагаемых: участки,
+            // новые камеры и врезки в существующие камеры.
+            double segmentCost = v.getSegments().stream()
+                    .mapToDouble(NewSegment::getCost).sum();
+            assertThat(s.getConstructionCost())
+                    .as("стоимость строительства варианта %s", v.getVariantId())
+                    .isCloseTo(segmentCost + s.getChamberConstructionCost()
+                                    + s.getExistingChamberTieInCost(),
+                            org.assertj.core.data.Offset.offset(2.0));
+
             assertThat(s.getCalculatedCost())
                     .as("итоговая стоимость варианта %s", v.getVariantId())
-                    .isCloseTo(sum, org.assertj.core.data.Offset.offset(2.0));
+                    .isCloseTo(s.getConstructionCost() + s.getUnconnectedPenalty(),
+                            org.assertj.core.data.Offset.offset(2.0));
 
-            assertThat(s.getLength()).isCloseTo(
-                    s.getNewNetworkLength() + s.getReconstructionLength(),
+            // Протяжённость показателя — только новая сеть: реконструкции в модели нет.
+            assertThat(s.getNewNetworkLength()).isCloseTo(
+                    v.getSegments().stream().mapToDouble(NewSegment::getLength).sum(),
                     org.assertj.core.data.Offset.offset(0.05));
 
-            double expectedScore = catalog.score(s.getCalculatedCost(), s.getLength());
+            double expectedScore =
+                    catalog.score(s.getCalculatedCost(), s.getNewNetworkLength());
             assertThat(s.getScore()).isCloseTo(expectedScore,
                     org.assertj.core.data.Offset.offset(0.002));
         }
     }
 
     @Test
-    @DisplayName("Врезок не больше, чем независимых частей сети; каждая стоит 5 млн")
+    @DisplayName("Врезки в сводке равны сумме врезок по местам присоединения")
     void tieInsAreAccounted() throws Exception {
         VariantPlanner.Plan p = plan();
         for (CalculationVariant v : p.getVariants()) {
             assertThat(v.getTieIns()).isNotEmpty();
             for (TieInResult t : v.getTieIns()) {
-                assertThat(t.getCost()).isEqualTo(catalog.tieInCost());
                 assertThat(t.getRequiredDiameter()).isPositive();
                 assertThat(t.getAddedFlowTph()).isPositive();
+                // Раздел 3.2: цена одной врезки фиксирована, и платится она за каждый
+                // новый участок, заканчивающийся в существующей камере.
+                assertThat(t.getCost())
+                        .as("стоимость врезок присоединения %s", t.getId())
+                        .isEqualTo(t.getTieInCount() * catalog.tieInCost());
             }
-            assertThat(v.getSummary().getTieInCost())
-                    .isEqualTo(v.getTieIns().size() * catalog.tieInCost());
+
+            int count = v.getTieIns().stream().mapToInt(TieInResult::getTieInCount).sum();
+            assertThat(v.getSummary().getExistingChamberTieInCount())
+                    .as("количество врезок в сводке варианта %s", v.getVariantId())
+                    .isEqualTo(count);
+            assertThat(v.getSummary().getExistingChamberTieInCost())
+                    .isEqualTo(count * catalog.tieInCost());
         }
     }
 
@@ -240,12 +264,13 @@ class VariantPlannerTest {
     }
 
     @Test
-    @DisplayName("Предельная длина непрерывной части одного ДУ соблюдена")
+    @DisplayName("Ни один участок сам по себе не длиннее предела своего ДУ")
     void runLengthLimitRespected() throws Exception {
         VariantPlanner.Plan p = plan();
         for (CalculationVariant v : p.getVariants()) {
-            // Проверка по каждому ДУ отдельно: сумма длин подряд идущих участков
-            // одного диаметра в одной ветви не превышает предел таблицы 4.1.
+            // Дешёвая локальная проверка: отдельный участок уже не должен выходить
+            // за предел таблицы 1. Предел по каждому пути от места присоединения
+            // до точки подключения проверяет NetworkSanityTest.
             for (NewSegment s : v.getSegments()) {
                 assertThat(s.getLength())
                         .as("участок %s длиной %.1f м при ДУ %d (предел %.0f м)",
@@ -257,26 +282,21 @@ class VariantPlannerTest {
     }
 
     @Test
-    @DisplayName("Реконструкция существующей сети согласована с расходами врезок")
-    void reconstructionIsConsistent() throws Exception {
+    @DisplayName("Расход, вносимый в существующую сеть, равен подключённой нагрузке")
+    void addedFlowMatchesConnectedLoad() throws Exception {
         VariantPlanner.Plan p = plan();
         for (CalculationVariant v : p.getVariants()) {
+            if (!v.getSummary().getUnconnectedPointKeys().isEmpty()) {
+                // Часть нагрузки не подключена, сходиться с полной суммой она не обязана.
+                continue;
+            }
             double addedTotal = v.getTieIns().stream()
                     .mapToDouble(TieInResult::getAddedFlowTph).sum();
             assertThat(addedTotal)
-                    .as("суммарный дополнительный расход равен подключённой нагрузке")
+                    .as("вариант %s: суммарный вносимый расход равен подключённой нагрузке",
+                            v.getVariantId())
                     .isCloseTo(scene.totalFutureFlowTph(),
                             org.assertj.core.data.Offset.offset(0.05));
-
-            v.getReconstructions().forEach(r -> {
-                assertThat(r.getRequiredDiameter()).isGreaterThan(r.getExistingDiameter());
-                assertThat(r.getCalculatedFlowTph())
-                        .isCloseTo(r.getExistingFlowTph() + r.getAddedFlowTph(),
-                                org.assertj.core.data.Offset.offset(0.01));
-                assertThat(r.getCost()).isCloseTo(
-                        r.getLength() * catalog.reconCostPerM(r.getRequiredDiameter()),
-                        org.assertj.core.data.Percentage.withPercentage(1));
-            });
         }
     }
 

@@ -28,10 +28,13 @@ import static org.assertj.core.api.Assertions.assertThat;
 class SceneMapperSummaryTest {
 
     /**
-     * Поля, которых в ответе нет намеренно: идентификаторы сводки и варианта
-     * живут в самом ответе о расчёте, дублировать их внутри незачем.
+     * Поля, которых в ответе нет намеренно. Идентификаторы сводки и варианта живут
+     * в самом ответе о расчёте, дублировать их внутри незачем. Ключи неподключённых
+     * точек — служебные: наружу идёт {@code unconnectedOksIds} с исходным типом
+     * идентификатора, как требует раздел 7.2, а строковые ключи нужны только расчёту.
      */
-    private static final List<String> DOMAIN_ONLY = List.of("id", "variantId");
+    private static final List<String> DOMAIN_ONLY =
+            List.of("id", "variantId", "unconnectedPointKeys");
 
     // Проекция мапперу нужна для геометрии сцены; сводка её не касается, поэтому
     // достаточно настроек по умолчанию — поднимать ради этого контекст незачем.
@@ -41,20 +44,19 @@ class SceneMapperSummaryTest {
 
     private static VariantSummary filled() {
         return VariantSummary.builder()
+                .id("summary_v1")
                 .variantId("v1")
                 .rank(1)
                 .constructionCost(1)
                 .chamberConstructionCost(2)
-                .tieInCost(3)
-                .reconstructionCost(4)
-                .chamberReconstructionCost(5)
-                .unconnectedPenalty(6)
-                .calculatedCost(7)
-                .newNetworkLength(8)
-                .reconstructionLength(9)
-                .length(10)
-                .score(11)
-                .unconnectedOksIds(List.of("42"))
+                .existingChamberTieInCount(3)
+                .existingChamberTieInCost(4)
+                .unconnectedPenalty(5)
+                .calculatedCost(6)
+                .newNetworkLength(7)
+                .score(8)
+                .unconnectedOksIds(List.of(42L))
+                .unconnectedPointKeys(List.of("42"))
                 .unconnectedReasons(Map.of("42", "Маршрут не найден"))
                 .build();
     }

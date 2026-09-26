@@ -69,7 +69,7 @@ export const api = {
   },
 
   /**
-   * Запуск расчёта. Режим с глубиной — дополнительная задача кейса: подбирается
+   * Запуск расчёта. Режим с глубиной — необязательная часть кейса: подбирается
    * глубина каждого участка, пересечения с существующими коммуникациями решаются
    * проходом сверху или снизу, стоимость пересчитывается с коэффициентом по глубине.
    */
@@ -77,19 +77,11 @@ export const api = {
     datasetId: string,
     withDepth = false,
     forbiddenZones: ForbiddenZone[] = [],
-    /** Существующая сеть уже несёт расход: принимается доля пропускной способности. */
-    existingNetworkLoaded = false,
   ): Promise<Job> {
     return request<Job>('/v1/jobs', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        datasetId,
-        withDepth,
-        forbiddenZones,
-        existingFlowMode: existingNetworkLoaded ? 'CAPACITY_FRACTION' : 'ZERO',
-        existingFlowFraction: existingNetworkLoaded ? 0.5 : null,
-      }),
+      body: JSON.stringify({ datasetId, withDepth, forbiddenZones }),
     })
   },
 

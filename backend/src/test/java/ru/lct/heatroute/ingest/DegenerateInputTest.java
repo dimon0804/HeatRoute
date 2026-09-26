@@ -11,6 +11,7 @@ import ru.lct.heatroute.variant.VariantPlanner;
 
 import java.io.ByteArrayInputStream;
 import java.nio.charset.StandardCharsets;
+import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatCode;
@@ -37,6 +38,8 @@ class DegenerateInputTest {
     SceneAssembler assembler;
     @Autowired
     VariantPlanner planner;
+    @Autowired
+    ru.lct.heatroute.export.ResultFeatureFactory exportFeatures;
 
     /** Набор из перечисленных объектов — вокруг точки, близкой к конкурсному району. */
     private static String dataset(String... features) {
@@ -59,7 +62,16 @@ class DegenerateInputTest {
     }
 
     private static String feature(int id, String type, String extra, String geometry) {
-        return "{\"type\":\"Feature\",\"properties\":{\"id\":" + id
+        return feature(String.valueOf(id), type, extra, geometry);
+    }
+
+    /**
+     * То же, но идентификатор подставляется в JSON как есть. Нужен там, где проверяется
+     * сам тип идентификатора: {@code 4} и {@code "4"} — разные входные данные, и раздел
+     * 7.2 требует вернуть каждый тем же типом, каким он пришёл.
+     */
+    private static String feature(String jsonId, String type, String extra, String geometry) {
+        return "{\"type\":\"Feature\",\"properties\":{\"id\":" + jsonId
                 + ",\"object_type\":\"" + type + "\"" + extra + "},\"geometry\":" + geometry + "}";
     }
 
@@ -172,7 +184,9 @@ class DegenerateInputTest {
         CalculationVariant best = plan.getVariants().get(0);
         boolean connected = best.getSegments().stream()
                 .anyMatch(seg -> "4".equals(seg.getEndNodeId()));
-        assertThat(connected || best.getSummary().getUnconnectedOksIds().contains("4"))
+        // Идентификатор в наборе числовой, поэтому и в списке неподключённых он число:
+        // раздел 7.2 требует сохранять тип идентификатора из входных данных.
+        assertThat(connected || best.getSummary().getUnconnectedOksIds().contains(4L))
                 .as("объект 4 либо в построенной сети, либо в списке неподключенных")
                 .isTrue();
     }
@@ -198,8 +212,8 @@ class DegenerateInputTest {
 
         CalculationVariant best = plan.getVariants().get(0);
         assertThat(best.getSummary().getUnconnectedOksIds())
-                .as("запертый объект назван поимённо")
-                .contains("4");
+                .as("запертый объект назван поимённо, числом — как во входном файле")
+                .contains(4L);
         assertThat(best.getSummary().getUnconnectedPenalty())
                 .as("за неподключенный объект начислен штраф раздела 8.3 ТП")
                 .isPositive();
@@ -219,6 +233,45 @@ class DegenerateInputTest {
 
         System.out.printf("%nОКС 4 не подключён: %s%n%n",
                 best.getSummary().getUnconnectedReasons().get("4"));
+    }
+
+    @Test
+    @DisplayName("unconnected_oks_ids отдаёт идентификатор тем же типом, каким он пришёл")
+    void unconnectedIdsKeepInputType() throws Exception {
+        // Точка 4 заперта кольцом-ограничением, как в предыдущей проверке: она заведомо
+        // окажется в списке неподключённых, и на ней видно, каким типом уходит её ID.
+        InputScene numeric = scene(dataset(
+                source(1, 37.6400, 55.7000),
+                network(2, 300, 37.6400, 55.7000, 37.6440, 55.7000),
+                connectionPoint(3, 12.5, 37.6420, 55.7008),
+                connectionPoint(4, 8.0, 37.6480, 55.7008),
+                ring(5, 37.6480, 55.7008)));
+
+        assertThat(exportedUnconnectedIds(numeric))
+                .as("во входном файле идентификатор был числом — числом он и уходит")
+                .contains(4L)
+                .doesNotContain("4");
+
+        // Тот же набор, но идентификатор запертой точки строковый.
+        InputScene textual = scene(dataset(
+                source(1, 37.6400, 55.7000),
+                network(2, 300, 37.6400, 55.7000, 37.6440, 55.7000),
+                connectionPoint(3, 12.5, 37.6420, 55.7008),
+                feature("\"p-4\"", "oks_connection_point", ",\"flow_tph\":8.0",
+                        point(37.6480, 55.7008)),
+                ring(5, 37.6480, 55.7008)));
+
+        assertThat(exportedUnconnectedIds(textual))
+                .as("строковый идентификатор не превращается в число")
+                .contains("p-4");
+    }
+
+    /** Значение {@code unconnected_oks_ids} в сводной записи лучшего варианта. */
+    @SuppressWarnings("unchecked")
+    private List<Object> exportedUnconnectedIds(InputScene scene) {
+        CalculationVariant best = planner.plan(scene).getVariants().get(0);
+        return (List<Object>) exportFeatures.summary(best.getSummary())
+                .getProperties().get("unconnected_oks_ids");
     }
 
     @Test

@@ -4,7 +4,7 @@ import { COLORS } from '../lib/mapStyle'
 import { meters } from '../lib/format'
 
 /**
- * Нормативные величины раздела 7 технического приложения. Здесь они нужны
+ * Нормативные величины раздела 5 технического приложения. Здесь они нужны
  * только как линии на чертеже; расчёт ведёт бэкенд по своему справочнику.
  */
 const NORMAL_DEPTH = 3.0
@@ -13,22 +13,21 @@ const MAX_SLOPE = 0.1
 
 interface Props {
   segments: Record<string, unknown>[]
-  crossings: Record<string, unknown>[]
   focusSegmentId: string
 }
 
 /**
  * Продольный профиль магистрали, проходящей через выбранный участок.
  * <p>
- * Разрез рядом показывает одно пересечение крупно, профиль — весь путь трубы:
- * спуск, площадку под коммуникацией и возврат на нормальную глубину. На защите
- * он отвечает на вопрос о соблюдении предельного уклона не словами, а числом
- * и линией.
+ * Профиль показывает весь путь трубы: спуск, участок на изменённой глубине
+ * и возврат на обычную отметку. На защите он отвечает на вопрос о соблюдении
+ * предельного уклона не словами, а числом и линией. Выбранный участок выделен,
+ * чтобы было видно его место в цепочке.
  */
-export function DepthProfile({ segments, crossings, focusSegmentId }: Props) {
+export function DepthProfile({ segments, focusSegmentId }: Props) {
   const profile = useMemo(
-    () => buildLongProfile(segments, crossings, focusSegmentId),
-    [segments, crossings, focusSegmentId],
+    () => buildLongProfile(segments, focusSegmentId),
+    [segments, focusSegmentId],
   )
 
   if (!profile) return null
@@ -50,6 +49,7 @@ export function DepthProfile({ segments, crossings, focusSegmentId }: Props) {
 
   const line = profile.points.map((p) => `${x(p.distance)},${y(p.depth)}`).join(' ')
   const slopeOk = profile.maxSlope <= MAX_SLOPE + 1e-9
+  const focus = profile.segments.find((s) => s.id === focusSegmentId)
 
   return (
     <div className="mt-3 rounded-lg border border-edge bg-ink/50 p-3">
@@ -59,12 +59,24 @@ export function DepthProfile({ segments, crossings, focusSegmentId }: Props) {
 
       <svg viewBox={`0 0 ${width} ${height}`} className="w-full" role="img"
            aria-label="Продольный профиль трассы по глубине">
+        {/* выбранный участок цепочки */}
+        {focus && (
+          <rect
+            x={x(focus.from)}
+            y={padTop}
+            width={Math.max(1.5, x(focus.to) - x(focus.from))}
+            height={plotH}
+            fill={COLORS.depth}
+            opacity="0.14"
+          />
+        )}
+
         {/* поверхность земли */}
         <line x1={padLeft} y1={y(0)} x2={width - padRight} y2={y(0)}
               stroke="#5b6f86" strokeWidth="1.5" />
         <text x="2" y={y(0) + 3} fill="#8ea0b5" fontSize="8">0 м</text>
 
-        {/* нормальная и минимальная глубина */}
+        {/* обычная и минимальная глубина */}
         <line x1={padLeft} y1={y(NORMAL_DEPTH)} x2={width - padRight} y2={y(NORMAL_DEPTH)}
               stroke="#3a4a5e" strokeWidth="1" strokeDasharray="4 3" />
         <text x="2" y={y(NORMAL_DEPTH) + 3} fill="#61748c" fontSize="8">
@@ -87,17 +99,10 @@ export function DepthProfile({ segments, crossings, focusSegmentId }: Props) {
         <polyline points={line} fill="none" stroke={COLORS.proposed}
                   strokeWidth="2" strokeLinejoin="round" />
 
-        {/* пересечения */}
-        {profile.crossings.map((c) => (
-          <g key={c.id}>
-            <line x1={x(c.distance)} y1={y(0)} x2={x(c.distance)} y2={y(depthSpan) - 4}
-                  stroke={COLORS.depthCrossing} strokeWidth="0.8" strokeDasharray="2 2"
-                  opacity="0.7" />
-            <circle cx={x(c.distance)} cy={y(c.utilityDepth)} r="3.5"
-                    fill={COLORS.existingNetwork} stroke="#0b1118" strokeWidth="1" />
-            <circle cx={x(c.distance)} cy={y(c.depth)} r="2.5"
-                    fill={COLORS.depthCrossing} />
-          </g>
+        {/* узлы между участками: там меняется профиль глубины */}
+        {profile.points.map((p) => (
+          <circle key={p.distance} cx={x(p.distance)} cy={y(p.depth)} r="1.8"
+                  fill={COLORS.depth} />
         ))}
 
         {/* шкала длины */}
@@ -109,19 +114,17 @@ export function DepthProfile({ segments, crossings, focusSegmentId }: Props) {
       </svg>
 
       <p className="mt-1 text-[11px] leading-snug text-muted">
-        Магистраль из {profile.segmentIds.length} участков, {meters(profile.totalLength)}.
+        Магистраль из {profile.segments.length} участков, {meters(profile.totalLength)}.
         Глубина от {profile.minDepth.toFixed(1)} до {profile.maxDepth.toFixed(1)} м.
         Наибольший уклон{' '}
-        <span className={slopeOk ? 'text-slate-200' : 'text-tie'}>
+        <span className={slopeOk ? 'text-slate-200' : 'text-alert'}>
           {profile.maxSlope.toFixed(3)} м/м
         </span>{' '}
         при пределе {MAX_SLOPE.toFixed(2)} м/м.
-        {profile.crossings.length > 0 && (
+        {focus && (
           <>
-            {' '}Кружками отмечены пересечения:{' '}
-            <span style={{ color: COLORS.existingNetwork }}>существующая коммуникация</span>
-            {' '}и{' '}
-            <span style={{ color: COLORS.depthCrossing }}>новая сеть</span>.
+            {' '}Выбранный участок отмечен светлой полосой: он идёт с{' '}
+            {focus.depthStart.toFixed(1)} до {focus.depthEnd.toFixed(1)} м.
           </>
         )}
       </p>

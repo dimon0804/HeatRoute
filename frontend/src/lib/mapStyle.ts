@@ -10,18 +10,17 @@ export const COLORS = {
   restrictionLine: '#2b3a4d',
   water: '#16313f',
   tram: '#3a2f1d',
+  railway: '#4a2b2b',
   existingNetwork: '#7d8fa3',
   source: '#ffffff',
   existingChamber: '#5b6f86',
   oksPoint: '#3ddc97',
   proposed: '#ff8a3d',
   proposedSpecial: '#ff5ec4',
-  reconstruction: '#ffd23f',
-  tieIn: '#ff4d6d',
   newChamber: '#4da3ff',
-  chamberReconstruction: '#ffd23f',
   technicalNode: '#c9d6e4',
-  depthCrossing: '#a78bfa',
+  /** Отметки глубины на продольном профиле. */
+  depth: '#a78bfa',
   forbiddenZone: '#ff4d6d',
   highlight: '#ffffff',
 } as const
@@ -77,6 +76,7 @@ export interface LegendItem {
 export const LEGEND: LegendItem[] = [
   { color: COLORS.restriction, label: 'Существующая застройка и ограничения', shape: 'area', group: 'Исходные данные' },
   { color: COLORS.water, label: 'Водные объекты', shape: 'area', group: 'Исходные данные' },
+  { color: COLORS.railway, label: 'Железная дорога, пересечение запрещено', shape: 'area', group: 'Исходные данные' },
   { color: COLORS.existingNetwork, label: 'Существующая тепловая сеть', shape: 'line', group: 'Исходные данные' },
   { color: COLORS.existingChamber, label: 'Существующая тепловая камера', shape: 'circle', group: 'Исходные данные' },
   { color: COLORS.source, label: 'Источник теплоснабжения', shape: 'circle', group: 'Исходные данные' },
@@ -85,9 +85,6 @@ export const LEGEND: LegendItem[] = [
 
   { color: COLORS.proposed, label: 'Новый участок, обычная прокладка', shape: 'line', group: 'Новая сеть' },
   { color: COLORS.proposedSpecial, label: 'Новый участок, специальный проход', shape: 'line', group: 'Новая сеть' },
-  { color: COLORS.reconstruction, label: 'Реконструкция существующего участка', shape: 'dashed', group: 'Новая сеть' },
-  { color: COLORS.tieIn, label: 'Точка врезки', shape: 'circle', group: 'Новая сеть' },
   { color: COLORS.newChamber, label: 'Новая тепловая камера', shape: 'circle', group: 'Новая сеть' },
   { color: COLORS.technicalNode, label: 'Технический узел', shape: 'circle', group: 'Новая сеть' },
-  { color: COLORS.depthCrossing, label: 'Пересечение по глубине', shape: 'circle', group: 'Новая сеть' },
 ]

@@ -84,9 +84,6 @@ export const OBJECT_TYPE_LABELS: Record<string, string> = {
   oks_connection_point: 'Точка подключения',
   oks_existing: 'Существующий ОКС',
   restriction: 'Пространственное ограничение',
-  tie_in: 'Точка врезки',
-  heat_network_reconstruction: 'Реконструкция участка',
-  heat_chamber_reconstruction: 'Реконструкция камеры',
   technical_node: 'Технический узел',
   variant_summary: 'Сводка варианта',
 }
@@ -98,7 +95,9 @@ export const RESTRICTION_LABELS: Record<string, string> = {
   prohibited_site: 'Запрещённая территория',
   water: 'Водный объект',
   road: 'Автомобильная дорога',
-  tram_tracks: 'Трамвайные и железнодорожные пути',
+  tram_tracks: 'Трамвайные пути',
+  // Железная дорога стоит отдельной строкой таблицы ограничений: пересекать её нельзя.
+  railway: 'Железная дорога',
   gas_pipeline: 'Газопровод',
   power_cable: 'Силовой кабель',
   heat_network: 'Существующая тепловая сеть',

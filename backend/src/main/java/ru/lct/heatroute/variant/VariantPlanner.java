@@ -8,7 +8,6 @@ import org.locationtech.jts.geom.Geometry;
 import org.springframework.stereotype.Component;
 import ru.lct.heatroute.calc.CostCalculator;
 import ru.lct.heatroute.calc.NetworkMaterializer;
-import ru.lct.heatroute.calc.ReconstructionCalculator;
 import ru.lct.heatroute.depth.DepthPlanner;
 import ru.lct.heatroute.depth.UtilityCrossing;
 import ru.lct.heatroute.domain.model.FutureOks;
@@ -17,10 +16,8 @@ import ru.lct.heatroute.domain.reference.ReferenceCatalog;
 import ru.lct.heatroute.domain.reference.ReferenceProperties;
 import ru.lct.heatroute.domain.reference.ReferenceProperties.DiameterRow;
 import ru.lct.heatroute.domain.result.CalculationVariant;
-import ru.lct.heatroute.domain.result.ChamberReconstructionResult;
 import ru.lct.heatroute.domain.result.NewChamberResult;
 import ru.lct.heatroute.domain.result.NewSegment;
-import ru.lct.heatroute.domain.result.ReconstructionResult;
 import ru.lct.heatroute.domain.result.TechnicalNodeResult;
 import ru.lct.heatroute.domain.result.TieInResult;
 import ru.lct.heatroute.domain.result.VariantSummary;
@@ -49,7 +46,7 @@ import java.util.stream.Collectors;
  *   <li>порождаются разбиения ОКС по независимым частям сети — от «все вместе»
  *       до нескольких кластеров по расстоянию в графе;</li>
  *   <li>для каждого разбиения и каждой точки врезки строится дерево и считается
- *       полная стоимость с реконструкцией существующей сети;</li>
+ *       полная стоимость части сети от этой точки;</li>
  *   <li>содержательно совпадающие решения отсеиваются, лучшие три ранжируются по S.</li>
  * </ol>
  */
@@ -63,7 +60,6 @@ public class VariantPlanner {
     private final TieInCandidateFinder tieInFinder;
     private final SteinerTreeBuilder treeBuilder;
     private final NetworkMaterializer materializer;
-    private final ReconstructionCalculator reconstruction;
     private final CostCalculator costCalculator;
     private final VariantRenumberer renumberer;
     private final CrossingRepair crossingRepair;
@@ -90,7 +86,7 @@ public class VariantPlanner {
                     + "предел примыканий";
     private static final String REASON_OVER_CAPACITY =
             "Расход превышает пропускную способность наибольшего условного диаметра "
-                    + "справочника (таблица 4.1)";
+                    + "справочника (таблица 1 технического приложения)";
 
     public VariantPlanner(ReferenceCatalog catalog,
                           GeoProperties geoProps,
@@ -98,7 +94,6 @@ public class VariantPlanner {
                           TieInCandidateFinder tieInFinder,
                           SteinerTreeBuilder treeBuilder,
                           NetworkMaterializer materializer,
-                          ReconstructionCalculator reconstruction,
                           CostCalculator costCalculator,
                           VariantRenumberer renumberer,
                           CrossingRepair crossingRepair,
@@ -111,7 +106,6 @@ public class VariantPlanner {
         this.tieInFinder = tieInFinder;
         this.treeBuilder = treeBuilder;
         this.materializer = materializer;
-        this.reconstruction = reconstruction;
         this.costCalculator = costCalculator;
         this.renumberer = renumberer;
         this.crossingRepair = crossingRepair;
@@ -129,6 +123,11 @@ public class VariantPlanner {
         int graphEdges;
         int tieInCandidates;
         long millis;
+        /**
+         * Вершин, не приведённых к пределу угла поворота 90°, по всем вариантам.
+         * Ноль — норма; всё остальное должно быть видно снаружи.
+         */
+        int sharpTurns;
         /** Режим с учётом глубины (дополнительная задача). */
         boolean withDepth;
         /** Пересечения с существующими коммуникациями по глубине, по варианту. */
@@ -321,7 +320,8 @@ public class VariantPlanner {
             List<CalculationVariant> withProfile = new ArrayList<>(produced.size());
             for (CalculationVariant variant : produced) {
                 withProfile.add(applyDepth(variant, scene, oksById,
-                        variant.getSummary().getUnconnectedOksIds(), crossings, depthUnresolved));
+                        variant.getSummary().getUnconnectedPointKeys(), crossings,
+                        depthUnresolved));
             }
             produced = withProfile;
 
@@ -337,15 +337,22 @@ public class VariantPlanner {
         log.info("Расчёт завершён за {} мс: вариантов {}, расчётный ДУ клиренсов {} мм{}",
                 millis, ranked.size(), designDn, withDepth ? ", с учётом глубины" : "");
 
+        int sharpTurns = ranked.stream()
+                .mapToInt(CalculationVariant::getSharpTurns).sum();
+        if (sharpTurns > 0) {
+            log.warn("Вершин, не приведённых к пределу угла поворота 90°: {}. "
+                    + "Показатель уходит в сводку прогона", sharpTurns);
+        }
+
         return new Plan(ranked, designDn, graph.size(), graph.edgeCount() / 2,
-                located.size(), millis, withDepth, crossings, depthUnresolved);
+                located.size(), millis, sharpTurns, withDepth, crossings, depthUnresolved);
     }
 
     // =================================================================================
 
     /**
      * Строит вариант для заданного разбиения ОКС: для каждой группы подбирается лучшая
-     * точка врезки, строится дерево, считается стоимость с реконструкцией.
+     * точка присоединения, строится дерево, считается стоимость.
      */
     private CalculationVariant buildVariant(InputScene scene,
                                             RoutingGraph graph,
@@ -370,6 +377,7 @@ public class VariantPlanner {
         Map<String, Integer> chamberMaxDn = new LinkedHashMap<>();
         NetworkMaterializer.IdSequence ids = new NetworkMaterializer.IdSequence(variantId);
         Set<String> tieInSignature = new LinkedHashSet<>();
+        int sharpTurns = 0;
 
         // Сколько примыканий у каждого узла врезки уже занято другими частями сети
         // этого же варианта. Без этого учёта две независимые части могут выбрать одну
@@ -427,6 +435,7 @@ public class VariantPlanner {
             unconnected.addAll(best.getUnconnected());
             unconnectedReasons.putAll(best.getUnconnectedReasons());
             chamberMaxDn.putAll(best.getChamberMaxDn());
+            sharpTurns += best.getSharpTurns();
             tieInSignature.add(best.getTieIn().getExistingObjectId() + "@"
                     + Math.round(best.getTieIn().getPositionFraction() * 100));
         }
@@ -446,12 +455,8 @@ public class VariantPlanner {
         chamberMaxDn = renumberer.remapChamberDiameters(
                 chamberMaxDn, renumbered.getNodeIdMapping());
 
-        ReconstructionCalculator.Result recon =
-                reconstruction.compute(scene, tieIns, chamberMaxDn, variantId);
-
         VariantSummary summary = costCalculator.summarize(variantId, segments, chambers,
-                tieIns, recon.getSegments(), recon.getChambers(), unconnected,
-                unconnectedReasons, oksById);
+                tieIns, unconnected, unconnectedReasons, oksById);
 
         // Отпечаток двухуровневый. Основная часть — точки врезки и разбиение ОКС:
         // по разделу 2.8 ТЗ именно они делают решения содержательно разными. Хвост —
@@ -470,9 +475,8 @@ public class VariantPlanner {
                 .chambers(chambers)
                 .technicalNodes(nodes)
                 .tieIns(tieIns)
-                .reconstructions(recon.getSegments())
-                .chamberReconstructions(recon.getChambers())
                 .summary(summary)
+                .sharpTurns(sharpTurns)
                 .structureFingerprint(fingerprint)
                 .build();
     }
@@ -481,7 +485,7 @@ public class VariantPlanner {
      * Кандидаты врезки, отобранные по нижней оценке стоимости подключения группы.
      * <p>
      * Полная проверка кандидата — это построение дерева, материализация, расчёт
-     * реконструкции и стоимости. На десятках кандидатов и нескольких группах это
+     * и расчёт стоимости. На десятках кандидатов и нескольких группах это
      * основная доля времени расчёта. Нижняя оценка — сумма расстояний в графе
      * от кандидата до терминалов группы — считается по уже готовой матрице
      * расстояний и отбирает те же места, что и полная проверка, но мгновенно.
@@ -573,7 +577,7 @@ public class VariantPlanner {
      * запрет пересечений, и только потом — дешевле.
      * <p>
      * Порядок именно такой, потому что цена ошибок разная. Неподключенный ОКС стоит
-     * не менее 100 млн руб. штрафа (раздел 8.3 ТП) и прямо ухудшает решение задачи.
+     * не менее 100 млн руб. штрафа (раздел 6 ТП) и прямо ухудшает решение задачи.
      * Пересечение трасс — нарушение правила, но его можно обойти другим разбиением
      * ОКС; жертвовать ради него подключением объекта нельзя.
      */
@@ -599,6 +603,8 @@ public class VariantPlanner {
         Map<String, String> unconnectedReasons;
         Map<String, Integer> chamberMaxDn;
         double score;
+        /** Вершин этой части, не приведённых к пределу угла поворота. */
+        int sharpTurns;
         /** Узел графа, в котором выполнена врезка. */
         int rootGraphNode;
         /** Сколько участков новой сети приведено в этот узел. */
@@ -722,20 +728,20 @@ public class VariantPlanner {
         }
 
         // Врезка в существующую камеру не требует новой камеры; иначе камера строится
-        // в точке врезки (раздел 8.2 ТП).
+        // в точке присоединения (раздел 2.4 ТП).
         String rootNodeId = candidate.isUsesExistingChamber()
                 ? candidate.getExistingChamberId()
                 : ids.nextChamber();
 
         NetworkMaterializer.Materialized m = materializer.materialize(built.getTree(), graph,
-                field, variantId, rootNodeId, terminalNodeIds, ids);
+                field, variantId, rootNodeId, terminalNodeIds, ids, barrier::blocks);
 
         List<NewChamberResult> chambers = new ArrayList<>(m.getChambers());
         Map<String, Integer> chamberMaxDn = new LinkedHashMap<>(m.getChamberMaxDiameter());
 
         if (!candidate.isUsesExistingChamber()) {
             // Стоимость камеры — по наибольшему ДУ всех примыкающих к ней участков
-            // в итоговом варианте, включая разрезанный существующий (раздел 8.2 ТП).
+            // в итоговом варианте, включая разрезанный существующий (раздел 3.2 ТП).
             int dn = Math.max(m.getRootDiameter(), candidate.getExistingDiameter());
             chambers.add(NewChamberResult.builder()
                     .id(rootNodeId)
@@ -749,6 +755,14 @@ public class VariantPlanner {
             chamberMaxDn.put(rootNodeId, dn);
         }
 
+        // Раздел 3.2 ТП: врезка платится только за примыкание к УЖЕ СУЩЕСТВУЮЩЕЙ
+        // камере, и притом за каждый новый участок, который в ней заканчивается.
+        // Если в точке присоединения строится новая камера, врезка отдельной строкой
+        // не считается — она включена в стоимость самой камеры.
+        int tieInCount = candidate.isUsesExistingChamber()
+                ? countSegmentsAt(m.getSegments(), rootNodeId)
+                : 0;
+
         TieInResult tieIn = TieInResult.builder()
                 .id(ids.nextTieIn())
                 .variantId(variantId)
@@ -759,7 +773,8 @@ public class VariantPlanner {
                 .requiredDiameter(m.getRootDiameter())
                 .positionFraction(candidate.getPositionFraction())
                 .addedFlowTph(m.getRootFlow())
-                .cost(catalog.tieInCost())
+                .tieInCount(tieInCount)
+                .cost(tieInCount * catalog.tieInCost())
                 .build();
 
         List<String> unconnected = new ArrayList<>(built.getUnreachableOks());
@@ -769,18 +784,31 @@ public class VariantPlanner {
         built.getUnreachableOks().forEach(id -> reasons.put(id, REASON_NO_ROUTE));
         m.getOverCapacityOks().forEach(id -> reasons.put(id, REASON_OVER_CAPACITY));
 
-        // Быстрая оценка для отбора кандидата врезки: полная стоимость части
-        // вместе с реконструкцией существующей сети именно от этой точки.
-        ReconstructionCalculator.Result recon = reconstruction.compute(scene,
-                List.of(tieIn), chamberMaxDn, variantId);
+        // Быстрая оценка для отбора кандидата присоединения: полная стоимость части
+        // сети именно от этой точки.
         VariantSummary partial = costCalculator.summarize(variantId, m.getSegments(), chambers,
-                List.of(tieIn), recon.getSegments(), recon.getChambers(), unconnected, oksById);
+                List.of(tieIn), unconnected, oksById);
 
         return new GroupResult(m.getSegments(), chambers, m.getTechnicalNodes(), tieIn,
-                unconnected, reasons, chamberMaxDn, partial.getScore(),
+                unconnected, reasons, chamberMaxDn, partial.getScore(), m.getSharpTurns(),
                 candidate.getGraphNodeIndex(),
                 built.getTree().childrenOf(candidate.getGraphNodeIndex()).size(),
                 countCrossings(m.getSegments(), acceptedSegments));
+    }
+
+    /**
+     * Сколько новых участков заканчивается в указанном узле. По разделу 3.2 ТП это
+     * и есть число врезок, когда узел — существующая тепловая камера.
+     */
+    private static int countSegmentsAt(List<NewSegment> segments, String nodeId) {
+        int count = 0;
+        for (NewSegment segment : segments) {
+            if (nodeId.equals(segment.getStartNodeId())
+                    || nodeId.equals(segment.getEndNodeId())) {
+                count++;
+            }
+        }
+        return count;
     }
 
     /** Сколько участков новой части пересекает уже принятые участки варианта. */
@@ -822,11 +850,10 @@ public class VariantPlanner {
                                           Map<String, List<String>> depthUnresolved) {
         DepthPlanner.Result depth = depthPlanner.apply(variant, scene);
         CalculationVariant updated = depth.getVariant();
-        // Стоимость участков изменилась: пересчитываем сводку по разделу 8 ТП.
+        // Стоимость участков изменилась: пересчитываем сводку по разделу 6 ТП.
         updated = updated.withSummary(costCalculator.summarize(
                 updated.getVariantId(), updated.getSegments(), updated.getChambers(),
-                updated.getTieIns(), updated.getReconstructions(),
-                updated.getChamberReconstructions(), unconnected,
+                updated.getTieIns(), unconnected,
                 variant.getSummary().getUnconnectedReasons(), oksById));
         crossings.put(updated.getVariantId(), depth.getCrossings());
         depthUnresolved.put(updated.getVariantId(), depth.getUnresolved());
@@ -900,7 +927,8 @@ public class VariantPlanner {
                 }
 
                 CalculationVariant relaid = applyDepth(rebuilt, scene, oksById,
-                        rebuilt.getSummary().getUnconnectedOksIds(), crossings, depthUnresolved);
+                        rebuilt.getSummary().getUnconnectedPointKeys(), crossings,
+                        depthUnresolved);
                 List<UtilityCrossing> relaidCrossings = crossings.get(variantId);
                 long violations = unmetClearances(relaidCrossings);
                 boolean noOksLost = relaid.getSummary().getUnconnectedOksIds().size()
@@ -1023,7 +1051,7 @@ public class VariantPlanner {
                 .collect(Collectors.toCollection(LinkedHashSet::new));
         int attempts = Math.max(0, routingProps.getSeededVariantAttempts());
         // Затравка не должна стоить подключения: вариант с лишним неподключенным ОКС
-        // дороже любого из уже найденных на 100 млн руб. штрафа (раздел 8.3 ТП),
+        // дороже любого из уже найденных на 100 млн руб. штрафа (раздел 6 ТП),
         // и в выдаче ему делать нечего.
         int bestUnconnected = produced.stream()
                 .mapToInt(v -> v.getSummary().getUnconnectedOksIds().size())

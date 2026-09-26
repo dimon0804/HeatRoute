@@ -133,27 +133,22 @@ public class ReferenceCatalog {
         return byDn.containsKey(dn);
     }
 
-    /** Стоимость 1 м нового строительства для ДУ, руб./м (таблица 4.1). */
+    /** Стоимость 1 м нового строительства для ДУ, руб./м (таблица 1). */
     public double newCostPerM(int dn) {
         return byDnOrNextUp(dn).getNewCostPerM();
     }
 
-    /** Стоимость 1 м реконструкции существующей сети для ДУ, руб./м (таблица 4.1). */
-    public double reconCostPerM(int dn) {
-        return byDnOrNextUp(dn).getReconCostPerM();
-    }
-
-    /** Предельная длина непрерывной части сети одного ДУ, м (таблица 4.1). */
+    /** Предельная длина непрерывной части сети одного ДУ, м (таблица 1). */
     public double maxRunLength(int dn) {
         return byDnOrNextUp(dn).getMaxRunLength();
     }
 
-    /** Расчётная ширина пары труб, м (таблица 4.2). */
+    /** Расчётная ширина пары труб, м (таблица 1). */
     public double pairWidth(int dn) {
         return byDnOrNextUp(dn).getPairWidth();
     }
 
-    /** Расчётная высота габарита пары труб, м (таблица 4.2). */
+    /** Расчётная высота габарита пары труб, м (таблица 1). */
     public double pairHeight(int dn) {
         return byDnOrNextUp(dn).getPairHeight();
     }
@@ -164,8 +159,8 @@ public class ReferenceCatalog {
 
     /**
      * Стоимость тепловой камеры по наибольшему условному диаметру примыкающих участков
-     * (таблица 8.2). Одна шкала применяется и к строительству новой камеры,
-     * и к реконструкции существующей.
+     * (раздел 3.2). Одна шкала применяется и к строительству новой камеры,
+     * Реконструкции камер в модели нет, шкала применяется только к новым.
      */
     public double chamberCost(int maxAdjacentDn) {
         for (ChamberCostRow row : props.getChamberCostScale()) {
@@ -179,7 +174,7 @@ public class ReferenceCatalog {
         return maxAdjacentDn < first.getDnFrom() ? first.getCost() : last.getCost();
     }
 
-    /** Стоимость одной независимой врезки, руб. (раздел 8.2). */
+    /** Стоимость одной врезки в существующую камеру, руб. (раздел 3.2). */
     public double tieInCost() {
         return props.getTieInCost();
     }
@@ -207,7 +202,7 @@ public class ReferenceCatalog {
 
     /**
      * Правило для типа ограничения из входных данных. Тип нормализуется, затем ищется
-     * в таблице 5.1, затем в псевдонимах; если не найден — возвращается консервативное
+     * в таблице 2, затем в псевдонимах; если не найден — возвращается консервативное
      * правило {@code unknownRestriction}, а сам тип попадает в диагностику.
      */
     public RestrictionRow ruleFor(String restrictionType) {
@@ -246,7 +241,7 @@ public class ReferenceCatalog {
 
     /**
      * Минимальное горизонтальное расстояние до объекта, м. Для существующих ОКС оно
-     * зависит от условного диаметра новой сети (таблица 5.1), для остальных типов
+     * зависит от условного диаметра новой сети (таблица 2), для остальных типов
      * задано константой.
      */
     public double minHorizontalDistance(RestrictionRow rule, int newDn) {
@@ -275,7 +270,7 @@ public class ReferenceCatalog {
         return minHorizontalDistance(rule, newDn) + pairWidth(newDn) / 2d;
     }
 
-    /** Условные габариты и глубина существующей коммуникации (таблица 4.3). */
+    /** Условные габариты и глубина существующей коммуникации (раздел 4). */
     public Optional<UtilityRow> existingUtility(String type) {
         return Optional.ofNullable(props.getExistingUtilities().get(normalizeType(type)));
     }
@@ -294,7 +289,7 @@ public class ReferenceCatalog {
     // =================================================================================
 
     /**
-     * Коэффициент стоимости по глубине (раздел 6.1 ТП):
+     * Коэффициент стоимости по глубине (раздел 5 ТП):
      * {@code Kгл = 1 + 0,10 * (h - 3)} при {@code h > 3}, иначе 1.
      *
      * @param depthToTop глубина до верхней границы расчётного габарита, м
@@ -310,7 +305,7 @@ public class ReferenceCatalog {
     /**
      * Средний коэффициент глубины на участке спуска или подъёма: зависимость Kгл от
      * глубины линейна, поэтому берётся среднее арифметическое коэффициентов концов
-     * (раздел 6.1 ТП).
+     * (раздел 5 ТП).
      */
     public double depthCostFactorAverage(double depthStart, double depthEnd) {
         return (depthCostFactor(depthStart) + depthCostFactor(depthEnd)) / 2d;

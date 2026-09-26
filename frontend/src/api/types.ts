@@ -49,21 +49,29 @@ export interface Dataset {
   diagnostics: DiagnosticsEntry[]
 }
 
+/**
+ * Сводка по варианту, раздел 7.2 технического приложения.
+ * <p>
+ * Стоимость строительства складывается из трёх слагаемых: новые участки сети,
+ * новые тепловые камеры и врезки в существующие тепловые камеры. Реконструкции
+ * существующей сети в расчётной модели нет, поэтому её полей здесь тоже нет.
+ */
 export interface VariantSummary {
   rank: number
+  /** Новые участки, новые камеры и врезки в существующие камеры вместе. */
   constructionCost: number
   chamberConstructionCost: number
-  tieInCost: number
-  reconstructionCost: number
-  chamberReconstructionCost: number
+  /** Сколько новых участков заканчивается в существующих тепловых камерах. */
+  existingChamberTieInCount: number
+  /** Стоимость этих врезок: 5 000 000 ₽ за каждую. */
+  existingChamberTieInCost: number
   unconnectedPenalty: number
   calculatedCost: number
   newNetworkLength: number
-  reconstructionLength: number
-  length: number
   score: number
-  unconnectedOksIds: string[]
-  /** Почему каждый объект остался без подключения: идентификатор → причина. */
+  /** Тип идентификатора сохраняется таким же, как во входных данных. */
+  unconnectedOksIds: (string | number)[]
+  /** Почему каждая точка осталась без подключения: идентификатор → причина. */
   unconnectedReasons?: Record<string, string>
 }
 
@@ -79,7 +87,8 @@ export interface JobStats {
   designDiameter: number
   graphNodes: number
   graphEdges: number
-  tieInCandidates: number
+  /** Сколько мест присоединения к существующей сети перебрал расчёт. */
+  tieInCandidates?: number
   millis: number
 }
 
@@ -98,34 +107,17 @@ export interface Job {
   variants: Variant[]
 }
 
-/** Типы объектов выходного GeoJSON по разделу 10 технического приложения. */
+/** Типы объектов выходного GeoJSON по разделу 7.1 технического приложения. */
 export type ResultObjectType =
   | 'heat_network'
-  | 'tie_in'
-  | 'heat_network_reconstruction'
   | 'heat_chamber'
-  | 'heat_chamber_reconstruction'
   | 'technical_node'
-  | 'depth_crossing'
   | 'variant_summary'
 
-/** Пересечение с существующей коммуникацией по глубине (дополнительная задача). */
-export interface DepthCrossingProps {
-  id: string
-  object_type: 'depth_crossing'
-  variant_id: string
-  segment_id: string
-  /** Расстояние от начала участка до пересечения, м. */
-  station: number
-  utility_id: string
-  utility_type: string
-  passage: 'above' | 'below'
-  new_depth: number
-  utility_depth: number
-  required_clearance: number
-  actual_clearance: number
-}
-
+/**
+ * Новый участок сети. Вертикальное положение задаётся только глубинами начала
+ * и конца: Z-координат в геометрии нет, в двумерном режиме глубины приходят null.
+ */
 export interface ResultSegmentProps {
   id: string
   object_type: 'heat_network'
@@ -141,17 +133,16 @@ export interface ResultSegmentProps {
   cost: number
 }
 
-export interface ResultReconstructionProps {
+/**
+ * Новая тепловая камера. Свойство `degree` сверх обязательного состава: по нему
+ * видно, сколько участков к камере примыкает, а предел по приложению — четыре.
+ */
+export interface ResultChamberProps {
   id: string
-  object_type: 'heat_network_reconstruction'
+  object_type: 'heat_chamber'
   variant_id: string
-  existing_object_id: string
-  existing_flow_tph: number
-  added_flow_tph: number
-  calculated_flow_tph: number
-  existing_diameter: number
-  required_diameter: number
-  length: number
+  diameter: number
+  degree?: number
   cost: number
 }
 

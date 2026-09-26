@@ -118,7 +118,7 @@ export function DatasetPanel({ datasets, selected, uploading, onUpload, onSelect
 
       {selected?.errorMessage && (
         <Section title="Ошибка разбора">
-          <p className="text-[13px] text-tie">{selected.errorMessage}</p>
+          <p className="text-[13px] text-alert">{selected.errorMessage}</p>
         </Section>
       )}
     </>
