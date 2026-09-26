@@ -103,7 +103,12 @@ public class ComplianceService {
         return report;
     }
 
-    /** Проверка произвольной выгрузки по файлу вместе с её входным набором. */
+    /**
+     * Проверка произвольной выгрузки по файлу. Входной набор необязателен: подрядчик
+     * присылает результат, а набор к нему прикладывает не всегда. Без набора часть
+     * правил проверить нечем, и они честно перечисляются в отчёте, а не проверяются
+     * наугад.
+     */
     public ComplianceReport checkFiles(MultipartFile result, MultipartFile dataset)
             throws IOException {
         List<RawFeature> exported = new ArrayList<>();
@@ -115,11 +120,14 @@ public class ComplianceService {
                     "В выгрузке не нашлось ни одного объекта: проверять нечего");
         }
 
-        SceneAssembler.Collector collector = new SceneAssembler.Collector();
-        try (InputStream in = dataset.getInputStream()) {
-            parser.parse(in, collector::accept);
+        InputScene scene = null;
+        if (dataset != null && !dataset.isEmpty()) {
+            SceneAssembler.Collector collector = new SceneAssembler.Collector();
+            try (InputStream in = dataset.getInputStream()) {
+                parser.parse(in, collector::accept);
+            }
+            scene = assembler.assemble(collector);
         }
-        InputScene scene = assembler.assemble(collector);
 
         ComplianceReport report = checker.check(exported, scene);
         log.info("Проверка загруженной выгрузки {}: сверок {}, нарушений {}",

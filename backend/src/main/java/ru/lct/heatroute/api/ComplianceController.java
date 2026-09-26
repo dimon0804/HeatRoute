@@ -57,15 +57,24 @@ public class ComplianceController {
 
     @PostMapping(value = "/compliance", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
     @Operation(summary = "Проверить произвольную выгрузку",
-            description = "Принимает выходной GeoJSON и входной набор, по которому он "
-                    + "получен, и проверяет выгрузку по правилам приложения. Выгрузка может "
-                    + "быть получена любым сервисом, не обязательно этим: проверка идёт "
-                    + "по файлу и ничего не знает о том, как он построен.")
+            description = "Принимает выходной GeoJSON и, по возможности, входной набор, "
+                    + "по которому он получен. Выгрузка может быть построена любым "
+                    + "сервисом, не обязательно этим: проверка идёт по файлу и ничего "
+                    + "не знает о том, как он сделан. "
+                    + "Входной набор необязателен. Без него проверяется всё, что видно "
+                    + "по самой выгрузке: состав типов и атрибутов, геометрия, стоимость "
+                    + "каждого участка по цене метра, стоимость камер по шкале, сходимость "
+                    + "сумм сводки и формула показателя. Правила, для которых нужен набор, "
+                    + "перечисляются в поле skipped, а не проверяются наугад: диаметр "
+                    + "камеры присоединения, например, задаёт разделённая ею существующая "
+                    + "линия, и без набора её не видно.")
     public ComplianceReportDto ofFiles(
             @Parameter(description = "Выходной GeoJSON с вариантами подключения")
             @RequestPart("result") MultipartFile result,
-            @Parameter(description = "Входной набор, по которому получен результат")
-            @RequestPart("dataset") MultipartFile dataset) throws IOException {
+            @Parameter(description = "Входной набор, по которому получен результат; "
+                    + "без него часть правил проверить нечем")
+            @RequestPart(value = "dataset", required = false) MultipartFile dataset)
+            throws IOException {
         return toDto(compliance.checkFiles(result, dataset));
     }
 
