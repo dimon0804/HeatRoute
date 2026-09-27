@@ -346,6 +346,7 @@ export default function App() {
             {tab === 'segments' && (
               <SegmentsPanel
                 result={result}
+                jobId={job?.id ?? null}
                 activeVariant={activeVariant}
                 selectedFeatureId={selectedFeatureId}
                 onSelectFeature={setSelectedFeatureId}

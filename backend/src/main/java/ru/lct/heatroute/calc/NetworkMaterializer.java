@@ -83,8 +83,6 @@ public class NetworkMaterializer {
         List<TechnicalNodeResult> technicalNodes;
         /** Условный диаметр новой сети в месте присоединения, мм. */
         int rootDiameter;
-        /** Расход, вносимый этой частью в существующую сеть, т/ч. */
-        double rootFlow;
         /** ОКС, чей расход не покрывается наибольшим ДУ справочника. */
         List<String> overCapacityOks;
         /** Наибольший ДУ участков, примыкающих к каждому узлу-камере. */
@@ -205,7 +203,7 @@ public class NetworkMaterializer {
         List<Stretch> stretches = buildStretches(tree, graph, flows);
         if (stretches.isEmpty()) {
             return new Materialized(List.of(), List.of(), List.of(), 0,
-                    flows.getOrDefault(tree.getRoot(), 0d), List.of(), Map.of(), 0);
+                    List.of(), Map.of(), 0);
         }
 
         assignDiameters(stretches, tree, overCapacity);
@@ -274,8 +272,7 @@ public class NetworkMaterializer {
         chamberMaxDn.put(rootNodeId, Math.max(rootDn, maxAdjacent(chamberAdjacent, rootNodeId)));
 
         return new Materialized(segments, chambers, technicalNodes, rootDn,
-                flows.getOrDefault(tree.getRoot(), 0d), overCapacity, chamberMaxDn,
-                sharpTurns);
+                overCapacity, chamberMaxDn, sharpTurns);
     }
 
     // =================================================================================

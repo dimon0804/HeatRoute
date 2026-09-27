@@ -110,9 +110,6 @@ class FullSpecDatasetTest {
         assertThat(s.getSegments())
                 .as("направление к источнику пришло атрибутом, а не восстановлено")
                 .allMatch(seg -> !seg.isUpstreamInferred());
-        assertThat(s.getSegments())
-                .as("расход существующей сети задан во входных данных")
-                .allMatch(seg -> !seg.isFlowAssumed() && seg.getFlowTph() > 0);
         assertThat(s.getChambers())
                 .as("условный диаметр камер задан во входных данных")
                 .allMatch(ch -> !ch.isDiameterInferred() && ch.getDiameter() > 0);

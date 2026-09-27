@@ -394,6 +394,8 @@ public class VariantPlanner {
         // часть по отдельности его соблюдает.
         Map<Integer, Integer> consumedAtNode = new LinkedHashMap<>();
 
+        Deadline deadline = Deadline.of(routingProps.getVariantTimeBudgetSeconds());
+
         for (List<SteinerTreeBuilder.Terminal> group : partition) {
             if (group.isEmpty()) {
                 continue;
@@ -401,7 +403,7 @@ public class VariantPlanner {
             List<TieInCandidate> shortlist = shortlist(candidates, group, distanceFromTerminal);
             GroupResult best = bestOverCandidates(scene, graph, field, shortlist, group,
                     variantId, terminalNodeIds, oksById, ids, consumedAtNode, segments,
-                    zones, forcedSeed);
+                    zones, forcedSeed, deadline);
 
             if (best != null && best.getCrossingsWithAccepted() > 0) {
                 // Независимые части сети объединить нельзя: у каждой своя точка врезки,
@@ -411,7 +413,8 @@ public class VariantPlanner {
                 // трасса удлиняется на обход, а вариант остаётся в выдаче.
                 GroupResult detour = bestOverCandidates(scene, graph, field, shortlist, group,
                         variantId, terminalNodeIds, oksById, ids, consumedAtNode, segments,
-                        zones.plus(RouteBarrier.ofAcceptedParts(segments)), forcedSeed);
+                        zones.plus(RouteBarrier.ofAcceptedParts(segments)), forcedSeed,
+                        deadline);
                 if (detour != null && detour.getCrossingsWithAccepted() == 0) {
                     log.debug("Часть сети перестроена в обход принятых участков: "
                                     + "подключено {} из {} ОКС, S части {} → {} (вариант {})",
@@ -561,18 +564,30 @@ public class VariantPlanner {
                                            Map<Integer, Integer> consumedAtNode,
                                            List<NewSegment> accepted,
                                            RouteBarrier barrier,
-                                           Integer forcedSeed) {
+                                           Integer forcedSeed,
+                                           Deadline deadline) {
         // Запреты одни и те же для всех кандидатов врезки этой части сети, поэтому
         // маска рёбер считается здесь, а не внутри построения каждого дерева.
         boolean[] allowedEdges = barrier.isEmpty() ? null
                 : graph.edgeMask((from, to) -> !barrier.blocks(graph.node(from).getLocation(),
                         graph.node(to).getLocation()));
         GroupResult best = null;
+        int examined = 0;
         for (TieInCandidate candidate : shortlist) {
+            // Перебор точек врезки — самая дорогая часть варианта, поэтому предел времени
+            // обрезает именно его. Хотя бы один работоспособный результат добирается
+            // всегда: без него часть сети осталась бы непостроенной, а это уже не
+            // «посчитали грубее», а «не посчитали».
+            if (best != null && deadline.spent()) {
+                log.warn("Предел времени на вариант {} исчерпан: из {} точек врезки "
+                        + "рассмотрено {}", variantId, shortlist.size(), examined);
+                break;
+            }
+            examined++;
             GroupResult result = buildGroup(scene, graph, field, candidate, group,
                     variantId, terminalNodeIds, oksById, ids,
                     consumedAtNode.getOrDefault(candidate.getGraphNodeIndex(), 0),
-                    accepted, barrier, allowedEdges, forcedSeed);
+                    accepted, barrier, allowedEdges, forcedSeed, deadline);
             if (result == null) {
                 continue;
             }
@@ -581,6 +596,36 @@ public class VariantPlanner {
             }
         }
         return best;
+    }
+
+    /**
+     * Предел времени на один вариант (ключ
+     * {@code heatroute.routing.variant-time-budget-seconds}).
+     * <p>
+     * Расходуется он только на перебор: лишние точки врезки, лишние формы дерева, лишние
+     * круги доводки. Начатый вариант всегда достраивается до конца — обрубок в выдаче
+     * выглядит как решение и хуже, чем решение, найденное грубее. Поэтому фактическое
+     * время может превысить предел на один шаг перебора, а срабатывание предела
+     * попадает в журнал: «посчитано быстрее, чем могло бы» — это то, о чём надо знать.
+     */
+    private static final class Deadline {
+
+        private static final Deadline UNLIMITED = new Deadline(Long.MAX_VALUE);
+
+        private final long at;
+
+        private Deadline(long at) {
+            this.at = at;
+        }
+
+        static Deadline of(long budgetSeconds) {
+            return budgetSeconds <= 0 ? UNLIMITED
+                    : new Deadline(System.nanoTime() + budgetSeconds * 1_000_000_000L);
+        }
+
+        boolean spent() {
+            return at != Long.MAX_VALUE && System.nanoTime() >= at;
+        }
     }
 
     /**
@@ -644,7 +689,8 @@ public class VariantPlanner {
                                    List<NewSegment> acceptedSegments,
                                    RouteBarrier barrier,
                                    boolean[] allowedEdges,
-                                   Integer forcedSeed) {
+                                   Integer forcedSeed,
+                                   Deadline deadline) {
         // Раздел 3 ТП: к камере примыкает не более четырёх участков. В точке врезки
         // часть мест уже занята: существующей камере — её текущими примыканиями,
         // новой камере на участке — двумя половинами разрезанного участка.
@@ -673,6 +719,9 @@ public class VariantPlanner {
             return null;
         }
         for (int attempt = firstAttempt; attempt < lastAttempt; attempt++) {
+            if (built != null && deadline.spent()) {
+                break;          // дерево уже есть, а лишние формы — это про качество
+            }
             SteinerTreeBuilder.Terminal seed = attempt == 0 || attempt > group.size()
                     ? null : group.get((attempt - 1) % group.size());
             SteinerTreeBuilder.Result trial = treeBuilder.build(graph,
@@ -724,6 +773,9 @@ public class VariantPlanner {
         // до показателей расчёта, а не остаётся в журнале.
         int verifiedMoves = 0;
         for (int round = 0; round < routingProps.getTreePolishRounds(); round++) {
+            if (round > 0 && deadline.spent()) {
+                break;          // доводка улучшает дерево, но сеть строится и без неё
+            }
             Effort reattach = treeImprover.improve(tree, graph, clearance);
             Effort relocate = junctionRelocator.relocate(tree, graph, clearance);
             verifiedMoves = reattach.getMovesVerified() + relocate.getMovesVerified();
@@ -788,9 +840,7 @@ public class VariantPlanner {
                 .existingObjectId(candidate.getExistingObjectId())
                 .existingObjectType(candidate.getExistingObjectType())
                 .existingDiameter(candidate.getExistingDiameter())
-                .requiredDiameter(m.getRootDiameter())
                 .positionFraction(candidate.getPositionFraction())
-                .addedFlowTph(m.getRootFlow())
                 .tieInCount(tieInCount)
                 .cost(tieInCount * catalog.tieInCost())
                 .build();
@@ -1157,7 +1207,7 @@ public class VariantPlanner {
      */
     private List<CalculationVariant> rank(List<CalculationVariant> variants,
                                           Map<String, Long> depthViolations) {
-        // Показатель S считается строго по разделу 8.2 ТП и ничем не дополняется.
+        // Показатель S считается строго по разделу 6 ТП и ничем не дополняется.
         // Невыдержанный вертикальный просвет — не надбавка к стоимости, а признак
         // того, что вариант неисполним, поэтому он отсекает раньше сравнения по S.
         Comparator<CalculationVariant> order = Comparator

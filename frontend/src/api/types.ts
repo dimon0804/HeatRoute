@@ -89,7 +89,71 @@ export interface JobStats {
   graphEdges: number
   /** Сколько мест присоединения к существующей сети перебрал расчёт. */
   tieInCandidates?: number
+  /** Поворотов круче предела приложения. Ноль — предел выдержан везде. */
+  sharpTurns?: number
+  /** Пересечений по глубине, где просвет выдержать не удалось. */
+  depthUnresolved?: number
+  /**
+   * Сколько одиночных ходов проверено на итоговом дереве без улучшения.
+   * Это и есть сертификат локальной оптимальности: глобальный оптимум
+   * эвристика не гарантирует, а вот чем подтверждена локальная — видно числом.
+   */
+  verifiedMoves?: number
   millis: number
+}
+
+/** Ограничение рядом с участком и то, насколько оно его зажимает. */
+export interface ExplainNearby {
+  restrictionId: string
+  type: string
+  rule: string
+  distanceM: number
+  requiredM: number
+  marginM: number
+  binding: boolean
+  attachment: boolean
+}
+
+/** Специальный проход, через который идёт участок. */
+export interface ExplainCrossing {
+  restrictionId: string
+  type: string
+  kSpecial: number
+  share: number
+}
+
+/** Разбор одного участка: чем задано его место. */
+export interface SegmentExplanation {
+  segmentId: string
+  diameter: number
+  lengthM: number
+  straightM: number
+  detourShare: number
+  tightestMarginM?: number | null
+  nearby: ExplainNearby[]
+  crossings: ExplainCrossing[]
+  verdict: string
+}
+
+/** Вклад одной точки подключения в стоимость решения. */
+export interface SensitivityRow {
+  change: string
+  objectId: string
+  score: number
+  cost: number
+  length: number
+  costContribution: number
+  lengthContribution: number
+  unconnected: unknown[]
+}
+
+export interface SensitivityReport {
+  baseScore: number
+  baseCost: number
+  baseLength: number
+  runs: number
+  millis: number
+  points: SensitivityRow[]
 }
 
 export interface Job {

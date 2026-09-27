@@ -1,5 +1,6 @@
 import type {
   ApiErrorBody, ComplianceReport, Dataset, ForbiddenZone, Job,
+  SegmentExplanation, SensitivityReport,
 } from './types'
 
 /**
@@ -125,6 +126,25 @@ export const api = {
     form.append('result', result)
     form.append('dataset', dataset)
     return request<ComplianceReport>('/v1/compliance', { method: 'POST', body: form })
+  },
+
+  /**
+   * Разбор трассы: чем зажат каждый участок варианта и насколько свободно
+   * он лежит. Считается по запросу, а не хранится: спрашивают его уже после
+   * того, как результат увиден, и про отдельный участок.
+   */
+  explain(jobId: string, variantCode?: string | null): Promise<SegmentExplanation[]> {
+    const suffix = variantCode ? `?variantCode=${encodeURIComponent(variantCode)}` : ''
+    return request<SegmentExplanation[]>(`/v1/jobs/${jobId}/explain${suffix}`)
+  },
+
+  /**
+   * Анализ чувствительности: вклад каждой точки подключения в стоимость.
+   * Ручка решает задачу заново без каждой точки по очереди, поэтому идёт
+   * десятки секунд, и число точек всегда ограничивается явно.
+   */
+  sensitivity(jobId: string, limit: number): Promise<SensitivityReport> {
+    return request<SensitivityReport>(`/v1/jobs/${jobId}/sensitivity?limit=${limit}`)
   },
 
   /** Результат расчёта как GeoJSON — для отрисовки на карте. */

@@ -100,6 +100,11 @@ class ComplianceCheckerTest {
                 .as("в выгрузке только четыре типа объектов раздела 7.1")
                 .containsOnly("heat_network", "heat_chamber", "technical_node",
                         "variant_summary");
+
+        // Число сверок печатается, а не только сравнивается с порогом: по нему видно,
+        // не перестало ли правило доходить до объектов после правки.
+        System.out.printf("%nПроверка выгрузки конкурсного набора: сверок %d, нарушений %d%n%n",
+                report.getChecks(), report.getFindings().size());
     }
 
     @Test

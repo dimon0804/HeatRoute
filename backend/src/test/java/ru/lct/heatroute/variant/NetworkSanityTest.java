@@ -10,6 +10,7 @@ import ru.lct.heatroute.domain.model.InputScene;
 import ru.lct.heatroute.domain.reference.ReferenceCatalog;
 import ru.lct.heatroute.domain.result.CalculationVariant;
 import ru.lct.heatroute.domain.result.NewSegment;
+import ru.lct.heatroute.domain.result.TechnicalNodeResult;
 import ru.lct.heatroute.ingest.GeoJsonStreamParser;
 import ru.lct.heatroute.ingest.SceneAssembler;
 
@@ -25,6 +26,7 @@ import java.util.Objects;
 import java.util.Set;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.within;
 
 /**
  * Инженерная осмысленность построенной сети.
@@ -276,6 +278,56 @@ class NetworkSanityTest {
                     .as("вариант %s: точки подключения без пути к врезке", v.getVariantId())
                     .isEmpty();
         }
+    }
+
+    @Test
+    @DisplayName("Условный диаметр не меняется посреди перегона")
+    void diameterHoldsWithinStretch() throws Exception {
+        VariantPlanner.Plan p = plan();
+
+        // Перегон — часть дерева между узлами, в которых меняется расчётный расход:
+        // местом присоединения, развилками и точками подключения. Внутри перегона расход
+        // постоянен, поэтому раздел 2.3 ТП требует держать один ДУ на всей его длине,
+        // а линия делится только на границах специального прохода. Ровно в этих границах
+        // и стоят технические узлы, и других делений внутри перегона не бывает. Значит
+        // по обе стороны любого технического узла лежит один и тот же перегон — там
+        // и видно, сохранён ли диаметр.
+        int checked = 0;
+        for (CalculationVariant v : p.getVariants()) {
+            Map<String, List<NewSegment>> incident = new LinkedHashMap<>();
+            for (NewSegment s : v.getSegments()) {
+                incident.computeIfAbsent(s.getStartNodeId(), k -> new ArrayList<>()).add(s);
+                incident.computeIfAbsent(s.getEndNodeId(), k -> new ArrayList<>()).add(s);
+            }
+
+            for (TechnicalNodeResult node : v.getTechnicalNodes()) {
+                List<NewSegment> around = incident.getOrDefault(node.getId(), List.of());
+                assertThat(around)
+                        .as("вариант %s: технический узел %s делит перегон, значит "
+                                + "участков вокруг него ровно два", v.getVariantId(), node.getId())
+                        .hasSize(2);
+
+                NewSegment before = around.get(0);
+                NewSegment after = around.get(1);
+                assertThat(after.getDiameter())
+                        .as("вариант %s: узел %s (%s) делит перегон, а ДУ на участках %s "
+                                + "и %s разный", v.getVariantId(), node.getId(),
+                                node.getReason(), before.getId(), after.getId())
+                        .isEqualTo(before.getDiameter());
+                assertThat(after.getFlowTph())
+                        .as("вариант %s: узел %s стоит на границе специального прохода, "
+                                + "а не в точке смены расхода", v.getVariantId(), node.getId())
+                        .isCloseTo(before.getFlowTph(), within(1e-9));
+                checked++;
+            }
+        }
+
+        // Правило, которое нечего проверять, выглядит соблюдённым: без единого деления
+        // перегона утверждение выше проходит само собой и ничего не значит.
+        assertThat(checked)
+                .as("на конкурсном наборе перегоны делятся специальными проходами, "
+                        + "и хотя бы один технический узел обязан существовать")
+                .isPositive();
     }
 
     /** Участки, исходящие из каждого узла: дерево направлено от места присоединения. */

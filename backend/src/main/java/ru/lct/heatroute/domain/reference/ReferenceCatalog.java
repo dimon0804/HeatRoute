@@ -179,16 +179,21 @@ public class ReferenceCatalog {
         return props.getTieInCost();
     }
 
-    /** Штраф за неподключенный ОКС с расчётным расходом {@code flowTph}, руб. (раздел 8.3). */
+    /**
+     * Штраф за неподключённую точку подключения с расчётным расходом {@code flowTph},
+     * руб. (раздел 6). Считается за точку, а не за ОКС: каждая точка — самостоятельная
+     * цель со своим расходом.
+     */
     public double unconnectedPenalty(double flowTph) {
         return props.getUnconnectedPenaltyFixed() + props.getUnconnectedPenaltyPerTph() * flowTph;
     }
 
     /**
-     * Итоговый показатель ранжирования S (раздел 9): чем меньше, тем выше вариант.
+     * Итоговый показатель ранжирования S (раздел 6): чем меньше, тем выше вариант.
      *
      * @param cost   итоговая стоимость варианта, руб.
-     * @param length общая протяжённость линейных работ (новые + реконструируемые), м
+     * @param length суммарная протяжённость новой сети, м; реконструкция в неё
+     *               не входит — её нет в расчётной модели
      */
     public double score(double cost, double length) {
         ReferenceProperties.Scoring s = props.getScoring();

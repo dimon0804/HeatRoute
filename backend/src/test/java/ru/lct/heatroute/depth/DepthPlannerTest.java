@@ -95,7 +95,7 @@ class DepthPlannerTest {
                     .allMatch(s -> s.getDepthStart() != null && s.getDepthEnd() != null,
                             "у каждого участка задана глубина в начале и в конце");
         }
-        // В плоской задаче глубина не задаётся вовсе (раздел 10.1 ТП).
+        // В плоской задаче глубина не задаётся вовсе (раздел 5 ТП).
         for (CalculationVariant v : flat.getVariants()) {
             assertThat(v.getSegments()).allMatch(s -> s.getDepthStart() == null);
         }
@@ -254,7 +254,7 @@ class DepthPlannerTest {
     }
 
     @Test
-    @DisplayName("Коэффициент по глубине применён к стоимости по формуле раздела 6.1")
+    @DisplayName("Коэффициент по глубине применён к стоимости по формуле раздела 5")
     void depthCostFactorApplied() throws Exception {
         prepare();
         for (CalculationVariant v : deep.getVariants()) {

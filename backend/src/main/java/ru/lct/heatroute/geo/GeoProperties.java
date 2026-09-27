@@ -29,7 +29,4 @@ public class GeoProperties {
 
     /** Число сегментов на четверть окружности при буферизации препятствий. */
     private int bufferQuadrantSegments = 2;
-
-    /** Предельное отклонение при проверке «точка лежит на линии», м. */
-    private double onLineTolerance = 0.05;
 }

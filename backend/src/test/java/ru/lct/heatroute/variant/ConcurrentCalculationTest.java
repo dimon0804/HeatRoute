@@ -11,7 +11,6 @@ import org.springframework.test.context.ActiveProfiles;
 import ru.lct.heatroute.domain.model.InputScene;
 import ru.lct.heatroute.geo.Geo;
 import ru.lct.heatroute.ingest.GeoJsonStreamParser;
-import ru.lct.heatroute.ingest.IngestProperties;
 import ru.lct.heatroute.ingest.SceneAssembler;
 
 import java.io.InputStream;
@@ -28,10 +27,10 @@ import static org.assertj.core.api.Assertions.assertThat;
 /**
  * Параметры расчёта не протекают между одновременными запусками.
  * <p>
- * Пул расчётов — до четырёх потоков, а запретные зоны, расчётный диаметр клиренсов
- * и допущение о загрузке существующей сети задаются на запуск. Если бы хоть один
- * из них хранился в общем состоянии, два одновременных расчёта портили бы друг друга,
- * и поймать это на демонстрации было бы поздно.
+ * Пул расчётов — до четырёх потоков, а запретные зоны и расчётный диаметр клиренсов
+ * задаются на запуск. Если бы хоть один из них хранился в общем состоянии, два
+ * одновременных расчёта портили бы друг друга, и поймать это на демонстрации было бы
+ * поздно.
  * <p>
  * Проверка прямая: те же расчёты выполняются сначала по одному, потом все сразу,
  * и результаты обязаны совпасть до сотой показателя.
@@ -48,16 +47,12 @@ class ConcurrentCalculationTest {
     VariantPlanner planner;
 
     private static InputScene plain;
-    private static InputScene loaded;
 
     @BeforeEach
     void prepare() throws Exception {
-        if (plain != null) {
-            return;
+        if (plain == null) {
+            plain = assembler.assemble(read());
         }
-        plain = assembler.assemble(read(), IngestProperties.ExistingFlowMode.ZERO, null);
-        loaded = assembler.assemble(read(),
-                IngestProperties.ExistingFlowMode.CAPACITY_FRACTION, 0.5);
     }
 
     private SceneAssembler.Collector read() throws Exception {
@@ -69,21 +64,29 @@ class ConcurrentCalculationTest {
     }
 
     /**
-     * Три разных расчёта: обычный, с запретной зоной и на загруженной сети.
+     * Три расчёта: без запретных зон и с зонами вокруг двух разных точек подключения.
      * <p>
-     * Зона ставится вокруг точки подключения первого ОКС: так она заведомо влияет
-     * на решение, а не оказывается в пустом месте. Расчёт с другим диаметром клиренсов
-     * сюда не включён намеренно — он строит собственный граф видимости, и проверка
-     * протечек стала бы вдвое дольше, ничего к ней не добавив.
+     * Зоны ставятся именно вокруг точек подключения: так они заведомо влияют на решение,
+     * а не оказываются в пустом месте, и все три расчёта дают разные показатели. Если бы
+     * зона одного запуска досталась другому, показатели сошлись бы — именно это здесь
+     * и ловится. Расчёт с другим диаметром клиренсов сюда не включён намеренно: он строит
+     * собственный граф видимости, и проверка протечек стала бы вдвое дольше, ничего
+     * к ней не добавив.
      */
     private List<Callable<Double>> tasks() {
-        Coordinate near = plain.getFutureOks().get(0).getConnectionPoint().getCoordinate();
-        Geometry zone = Geo.point(near).buffer(30);
+        Geometry firstZone = zoneAroundOks(0);
+        Geometry secondZone = zoneAroundOks(1);
         return List.of(
                 () -> score(plain, VariantPlanner.Options.flat()),
                 () -> score(plain, VariantPlanner.Options.builder()
-                        .forbiddenZones(List.of(zone)).build()),
-                () -> score(loaded, VariantPlanner.Options.flat()));
+                        .forbiddenZones(List.of(firstZone)).build()),
+                () -> score(plain, VariantPlanner.Options.builder()
+                        .forbiddenZones(List.of(secondZone)).build()));
+    }
+
+    private Geometry zoneAroundOks(int index) {
+        Coordinate near = plain.getFutureOks().get(index).getConnectionPoint().getCoordinate();
+        return Geo.point(near).buffer(30);
     }
 
     private double score(InputScene scene, VariantPlanner.Options options) {

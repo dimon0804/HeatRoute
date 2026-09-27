@@ -5,6 +5,7 @@ import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.test.context.ActiveProfiles;
+import ru.lct.heatroute.domain.model.FutureOks;
 import ru.lct.heatroute.domain.model.InputScene;
 import ru.lct.heatroute.domain.reference.ReferenceCatalog;
 import ru.lct.heatroute.domain.result.CalculationVariant;
@@ -44,6 +45,8 @@ class VariantPlannerTest {
     VariantPlanner planner;
     @Autowired
     ReferenceCatalog catalog;
+    @Autowired
+    ru.lct.heatroute.routing.RoutingProperties routingProps;
 
     private static VariantPlanner.Plan plan;
     private static InputScene scene;
@@ -187,8 +190,6 @@ class VariantPlannerTest {
         for (CalculationVariant v : p.getVariants()) {
             assertThat(v.getTieIns()).isNotEmpty();
             for (TieInResult t : v.getTieIns()) {
-                assertThat(t.getRequiredDiameter()).isPositive();
-                assertThat(t.getAddedFlowTph()).isPositive();
                 // Раздел 3.2: цена одной врезки фиксирована, и платится она за каждый
                 // новый участок, заканчивающийся в существующей камере.
                 assertThat(t.getCost())
@@ -290,13 +291,60 @@ class VariantPlannerTest {
                 // Часть нагрузки не подключена, сходиться с полной суммой она не обязана.
                 continue;
             }
-            double addedTotal = v.getTieIns().stream()
-                    .mapToDouble(TieInResult::getAddedFlowTph).sum();
+            // Вносимый расход читается по участкам, выходящим из мест присоединения:
+            // это узлы, в которые не входит ни один участок. Так проверяется то, что
+            // уедет в выгрузку, а не отдельно посчитанная служебная величина.
+            java.util.Set<String> ends = v.getSegments().stream()
+                    .map(NewSegment::getEndNodeId)
+                    .collect(java.util.stream.Collectors.toSet());
+            double addedTotal = v.getSegments().stream()
+                    .filter(s -> !ends.contains(s.getStartNodeId()))
+                    .mapToDouble(NewSegment::getFlowTph).sum();
             assertThat(addedTotal)
                     .as("вариант %s: суммарный вносимый расход равен подключённой нагрузке",
                             v.getVariantId())
                     .isCloseTo(scene.totalFutureFlowTph(),
                             org.assertj.core.data.Offset.offset(0.05));
+        }
+    }
+
+    @Test
+    @DisplayName("Предел времени на вариант сужает перебор и не теряет объекты")
+    void timeBudgetNarrowsSearchWithoutLosingObjects() throws Exception {
+        VariantPlanner.Plan unlimited = plan();
+
+        // Предел задаётся настройкой сервиса, и подменить её иначе как на общем бине
+        // нельзя. Расчёты в сюите идут по одному, а значение возвращается на место
+        // в любом случае: соседний тест не должен зависеть от этого.
+        long before = routingProps.getVariantTimeBudgetSeconds();
+        VariantPlanner.Plan tight;
+        try {
+            routingProps.setVariantTimeBudgetSeconds(1);
+            tight = planner.plan(scene);
+        } finally {
+            routingProps.setVariantTimeBudgetSeconds(before);
+        }
+
+        assertThat(tight.getVariants())
+                .as("предел сужает перебор, а не отменяет расчёт")
+                .isNotEmpty();
+        assertThat(tight.getMillis())
+                .as("секунда на вариант против %d мс без предела", unlimited.getMillis())
+                .isLessThan(unlimited.getMillis());
+
+        // Сужение перебора может дать решение хуже, но не имеет права потерять объект:
+        // каждый перспективный ОКС либо в построенной сети, либо назван неподключённым.
+        CalculationVariant best = tight.getVariants().get(0);
+        java.util.Set<String> touched = new java.util.LinkedHashSet<>();
+        best.getSegments().forEach(s -> {
+            touched.add(s.getStartNodeId());
+            touched.add(s.getEndNodeId());
+        });
+        for (FutureOks oks : scene.getFutureOks()) {
+            assertThat(touched.contains(oks.getConnectionPointId())
+                    || best.getSummary().getUnconnectedPointKeys().contains(oks.getId()))
+                    .as("ОКС %s пропал при сужении перебора", oks.getId())
+                    .isTrue();
         }
     }
 

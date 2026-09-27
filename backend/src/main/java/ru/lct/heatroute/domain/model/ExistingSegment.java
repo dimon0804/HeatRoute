@@ -21,9 +21,6 @@ public class ExistingSegment {
     /** Текущий условный диаметр, мм. */
     int diameter;
 
-    /** Текущий расчётный расход, т/ч. */
-    double flowTph;
-
     /**
      * ID следующего существующего объекта по направлению к источнику.
      * Если во входных данных не передан — восстанавливается по геометрии
@@ -35,9 +32,6 @@ public class ExistingSegment {
     /** {@code true}, если {@link #upstreamObjectId} восстановлен, а не пришёл во входе. */
     @With
     boolean upstreamInferred;
-
-    /** {@code true}, если расход не был передан и принят равным нулю. */
-    boolean flowAssumed;
 
     /** Длина участка в рабочей проекции, м. */
     public double length() {

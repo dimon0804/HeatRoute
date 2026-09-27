@@ -14,15 +14,6 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
 @ConfigurationProperties(prefix = "heatroute.ingest")
 public class IngestProperties {
 
-    /** Что делать, если у существующего участка нет атрибута {@code flow_tph}. */
-    private ExistingFlowMode existingFlowMode = ExistingFlowMode.ZERO;
-
-    /**
-     * Доля пропускной способности, принимаемая за существующий расход
-     * в режиме {@link ExistingFlowMode#CAPACITY_FRACTION}.
-     */
-    private double existingFlowCapacityFraction = 0.5;
-
     /**
      * Принимать ли расход перспективного ОКС с точки подключения, если полигона
      * {@code oks_future} в наборе нет. Конкурсный набор 2026 года устроен именно так.
@@ -34,22 +25,4 @@ public class IngestProperties {
      * берётся ближайшая к существующей сети точка контура ОКС.
      */
     private boolean deriveMissingConnectionPoint = true;
-
-    /** Прерывать разбор при первой ошибке или собирать полный протокол. */
-    private boolean failFast = false;
-
-    public enum ExistingFlowMode {
-        /**
-         * Расход считается нулевым. Нейтральное допущение: сервис не приписывает
-         * существующей сети нагрузки, которой в данных нет, и не завышает объём
-         * обязательного расчёта: резерв существующей сети в нём не определяется.
-         */
-        ZERO,
-        /**
-         * Расход принимается как доля пропускной способности существующего ДУ.
-         * Консервативный режим для наборов, где загрузку сети нужно учесть,
-         * а фактических значений нет.
-         */
-        CAPACITY_FRACTION
-    }
 }

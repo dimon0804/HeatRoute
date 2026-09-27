@@ -103,11 +103,8 @@ heatroute:
     bufferQuadrantSegments: 2
 
   ingest:
-    existingFlowMode: ZERO
-    existingFlowCapacityFraction: 0.5
     allowFlowOnConnectionPoint: true
     deriveMissingConnectionPoint: true
-    failFast: false
 
 ---
 # Профиль для запуска без базы данных: удобен на разборе алгоритма и в тестах.

@@ -113,6 +113,16 @@ def to_utm(lon: float, lat: float) -> tuple[float, float]:
     return x, y
 
 
+def plane(coordinate) -> tuple[float, float]:
+    """Точка в UTM по координате любой длины.
+
+    Третье число в выгрузке — само по себе нарушение, его называет отдельная
+    проверка. Здесь оно отбрасывается: иначе разбор обрывался бы на первом же
+    таком объекте и об остальных правилах отчёт не сказал бы ничего.
+    """
+    return to_utm(float(coordinate[0]), float(coordinate[1]))
+
+
 def turn_deg(a, b, c) -> float:
     ux, uy = b[0] - a[0], b[1] - a[1]
     vx, vy = c[0] - b[0], c[1] - b[1]
@@ -164,10 +174,11 @@ def validate(result: dict, dataset: dict | None) -> Report:
             report.check(geometry is not None,
                          f"у объекта {props.get('id')!r} нет геометрии")
             if geometry:
-                for point in _points(geometry):
+                for index, point in enumerate(_points(geometry)):
                     report.check(len(point) == 2,
-                                 f"координата объекта {props.get('id')!r} содержит третье "
-                                 f"число: Z-координаты приложением не требуются")
+                                 f"объект {props.get('id')!r}: в координате {index} "
+                                 f"есть третье число, а вертикальное положение "
+                                 f"задаётся глубиной начала и конца участка")
 
     input_nodes = _input_node_ids(dataset) if dataset else set()
     flows = _input_flows(dataset) if dataset else {}
@@ -214,7 +225,7 @@ def _existing_lines(dataset: dict) -> list[tuple[str, int, list]]:
         geometry = feature.get("geometry") or {}
         if geometry.get("type") != "LineString":
             continue
-        pts = [to_utm(x, y) for x, y in geometry["coordinates"]]
+        pts = [plane(c) for c in geometry["coordinates"]]
         out.append((str(props.get("id")), int(props.get("diameter") or 0), pts))
     return out
 
@@ -273,7 +284,7 @@ def _validate_variant(report: Report, variant_id: str, objects, input_nodes, flo
     for segment in segments:
         props = segment["properties"]
         sid = str(props["id"])
-        pts = [to_utm(x, y) for x, y in segment["geometry"]["coordinates"]]
+        pts = [plane(c) for c in segment["geometry"]["coordinates"]]
         coords_by_id[sid] = pts
 
         for field in ("start_node_id", "end_node_id"):
@@ -323,18 +334,22 @@ def _validate_variant(report: Report, variant_id: str, objects, input_nodes, flo
 
     for chamber in chambers:
         cid = str(chamber["properties"]["id"])
-        location = to_utm(*chamber["geometry"]["coordinates"])
+        location = plane(chamber["geometry"]["coordinates"])
 
         # Новая камера может стоять прямо в точке присоединения к существующему участку.
-        # Тогда существующая линия проходит через неё и по разъяснению №12 занимает два
-        # примыкания, а её ДУ участвует в выборе диаметра и стоимости камеры.
+        # Линия, проходящая через камеру, разделена ею на две части и по разъяснению №12
+        # занимает два примыкания; линия, которая в камере заканчивается, — одно.
+        # Считаются все линии под камерой: диаметр камеры задаёт самая толстая из них,
+        # а примыкание занимает каждая.
         host_dn = 0
         host_count = 0
         for _, line_dn, pts in existing_lines:
-            if _distance_to_line(location, pts) <= 1.0:
-                host_dn = max(host_dn, line_dn)
-                host_count = 2
-                break
+            if _distance_to_line(location, pts) > 1.0:
+                continue
+            host_dn = max(host_dn, line_dn)
+            ends_here = min(math.dist(location, pts[0]),
+                            math.dist(location, pts[-1])) <= 1.0
+            host_count += 1 if ends_here else 2
 
         degree = len(adjacency.get(cid, [])) + host_count
         report.check(degree <= MAX_CHAMBER_DEGREE,
@@ -427,8 +442,8 @@ def _validate_paths(report, variant_id, segments, chambers, nodes, flows,
 
     chamber_at = {}
     for chamber in chambers:
-        chamber_at[str(chamber["properties"]["id"])] = to_utm(
-            *chamber["geometry"]["coordinates"])
+        chamber_at[str(chamber["properties"]["id"])] = plane(
+            chamber["geometry"]["coordinates"])
 
     # Корень независимой части сети: существующая камера либо новая камера,
     # поставленная в точке присоединения к существующему участку.
@@ -489,7 +504,7 @@ def _validate_paths(report, variant_id, segments, chambers, nodes, flows,
             path.append(segment)
             props = segment["properties"]
             current = (str(props["end_node_id"])
-                       if str(props["start_node_id"]) != current
+                       if str(props["start_node_id"]) == current
                        else str(props["start_node_id"]))
             if current in parent_segment and parent_segment[current] is segment:
                 break

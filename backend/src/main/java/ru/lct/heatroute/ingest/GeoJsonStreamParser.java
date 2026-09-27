@@ -1,8 +1,10 @@
 package ru.lct.heatroute.ingest;
 
 import com.fasterxml.jackson.core.JsonFactory;
+import com.fasterxml.jackson.core.JsonLocation;
 import com.fasterxml.jackson.core.JsonParser;
 import com.fasterxml.jackson.core.JsonToken;
+import com.fasterxml.jackson.core.JsonProcessingException;
 import lombok.extern.slf4j.Slf4j;
 import org.locationtech.jts.geom.Coordinate;
 import org.locationtech.jts.geom.Geometry;
@@ -58,35 +60,56 @@ public class GeoJsonStreamParser {
     }
 
     public long parse(InputStream in, Consumer<RawFeature> consumer) throws IOException {
-        long count = 0;
         try (JsonParser p = jsonFactory.createParser(in)) {
-            if (p.nextToken() != JsonToken.START_OBJECT) {
-                throw new GeoJsonFormatException("Ожидался объект GeoJSON верхнего уровня");
-            }
-            boolean featuresSeen = false;
-            while (p.nextToken() != JsonToken.END_OBJECT && p.currentToken() != null) {
-                String field = p.currentName();
-                p.nextToken();
-                if ("features".equals(field)) {
-                    featuresSeen = true;
-                    if (p.currentToken() != JsonToken.START_ARRAY) {
-                        throw new GeoJsonFormatException("Поле features не является массивом");
-                    }
-                    while (p.nextToken() != JsonToken.END_ARRAY) {
-                        RawFeature feature = readFeature(p);
-                        if (feature != null) {
-                            consumer.accept(feature);
-                            count++;
-                        }
-                    }
-                } else {
-                    p.skipChildren();
+            return readCollection(p, consumer);
+        } catch (JsonProcessingException e) {
+            // Сломанный синтаксис — такая же вина присланного файла, как отсутствие
+            // features: ошибка формата, а не сбой сервиса. Объявлять её нужно тем же
+            // исключением, иначе каждый вход, читающий файл, обязан сам ловить
+            // Jackson, и любой забытый вход отвечает на битый файл пятисоткой.
+            throw new GeoJsonFormatException(describe(e), e);
+        }
+    }
+
+    /** Место ошибки называется прямо в сообщении: иначе в файле на гигабайт его не найти. */
+    private String describe(JsonProcessingException e) {
+        JsonLocation at = e.getLocation();
+        if (at == null || at.getLineNr() <= 0) {
+            return "Не удалось разобрать как JSON";
+        }
+        return "Не удалось разобрать как JSON: строка " + at.getLineNr()
+                + ", позиция " + at.getColumnNr();
+    }
+
+    private long readCollection(JsonParser p, Consumer<RawFeature> consumer)
+            throws IOException {
+        long count = 0;
+        if (p.nextToken() != JsonToken.START_OBJECT) {
+            throw new GeoJsonFormatException("Ожидался объект GeoJSON верхнего уровня");
+        }
+        boolean featuresSeen = false;
+        while (p.nextToken() != JsonToken.END_OBJECT && p.currentToken() != null) {
+            String field = p.currentName();
+            p.nextToken();
+            if ("features".equals(field)) {
+                featuresSeen = true;
+                if (p.currentToken() != JsonToken.START_ARRAY) {
+                    throw new GeoJsonFormatException("Поле features не является массивом");
                 }
+                while (p.nextToken() != JsonToken.END_ARRAY) {
+                    RawFeature feature = readFeature(p);
+                    if (feature != null) {
+                        consumer.accept(feature);
+                        count++;
+                    }
+                }
+            } else {
+                p.skipChildren();
             }
-            if (!featuresSeen) {
-                throw new GeoJsonFormatException(
-                        "В файле нет поля features — ожидается FeatureCollection");
-            }
+        }
+        if (!featuresSeen) {
+            throw new GeoJsonFormatException(
+                    "В файле нет поля features — ожидается FeatureCollection");
         }
         return count;
     }

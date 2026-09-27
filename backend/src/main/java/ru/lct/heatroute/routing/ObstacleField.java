@@ -286,15 +286,37 @@ public class ObstacleField {
             if (!o.getPreparedBuffered().intersects(segment)) {
                 continue;
             }
-            if (o.getPreparedSource().intersects(segment)) {
-                continue;               // это пересечение, а не проход рядом
+            double inside = o.getBuffered().intersection(segment).getLength();
+            if (inside <= tolerance) {
+                continue;               // укладывается в допуск и без всяких поправок
             }
-            Geometry inside = o.getBuffered().intersection(segment);
-            if (inside.getLength() > tolerance) {
+            if (!o.getPreparedSource().intersects(segment)) {
+                return o;               // объект не пересечён: это проход рядом
+            }
+            // Отрезок пересекает объект, но отступ снимается только на самом
+            // пересечении, а не со всего отрезка: иначе трасса, один раз перешедшая
+            // дорогу и дальше идущая вдоль неё в полутора метрах, нарушением не будет.
+            Geometry beyondCrossing = segment.difference(crossingZone(o, segment));
+            if (o.getBuffered().intersection(beyondCrossing).getLength() > tolerance) {
                 return o;
             }
         }
         return null;
+    }
+
+    /**
+     * Разрешённое специальное пересечение вдоль отрезка: сам объект и по
+     * {@code specialMarginM} за его границей. Границы те же, по которым приложение
+     * выделяет специальный участок и берёт его по коэффициенту Kспец (таблица 2,
+     * раздел 6), — отступ снимается ровно там, где пересечение разрешено и оплачено.
+     */
+    private Geometry crossingZone(Obstacle o, LineString segment) {
+        Geometry crossed = segment.intersection(o.getSource());
+        double margin = o.getRule().getSpecialMarginM();
+        if (crossed.isEmpty() || margin <= 0) {
+            return o.getSource();
+        }
+        return crossed.buffer(margin, geoProps.getBufferQuadrantSegments());
     }
 
     /**
@@ -493,10 +515,11 @@ public class ObstacleField {
     }
 
     /**
-     * Слияние пересекающихся специальных интервалов. Раздел 8.1 ТП требует, чтобы
-     * у одного участка был один набор расчётных параметров: если трасса пересекает
-     * два объекта подряд и их специальные зоны накладываются, разорвать участок
-     * между ними нельзя — берётся наибольший коэффициент.
+     * Слияние пересекающихся специальных интервалов. Раздел 4 ТП и разъяснение №8
+     * требуют, чтобы у одного участка был один набор расчётных параметров: если трасса
+     * пересекает два объекта подряд и их специальные зоны накладываются, коэффициенты
+     * не суммируются и не перемножаются — берётся наибольший, а новый участок
+     * начинается на границах общего фрагмента.
      */
     private List<SpecialInterval> mergeOverlapping(List<SpecialInterval> intervals) {
         if (intervals.size() <= 1) {

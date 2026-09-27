@@ -69,7 +69,7 @@ class SceneIngestTest {
         assertThat(s.getChambers()).hasSize(9);
         assertThat(s.getFutureOks()).hasSize(17);
         // 85 существующих зданий + 2 водных объекта + 1 железная дорога = 88 из входного
-        // файла, плюс 29 участков существующей тепловой сети: таблица 5.1 ТП относит
+        // файла, плюс 29 участков существующей тепловой сети: таблица 2 ТП относит
         // её к объектам, которые пересекаются только специальным проходом.
         assertThat(s.getRestrictions()).hasSize(88 + 29);
         assertThat(s.getRestrictions())

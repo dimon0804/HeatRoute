@@ -290,18 +290,18 @@ public class ComplianceChecker {
             int hostDn = 0;
             int hostCount = 0;
             if (scene != null && chamber.geometry() != null) {
-                Coordinate location = chamber.geometry().getCoordinate();
+                Point location = chamber.geometry().getFactory()
+                        .createPoint(chamber.geometry().getCoordinate());
                 for (ExistingSegment existing : scene.getSegments()) {
-                    if (existing.getGeometry() == null) {
+                    if (existing.getGeometry() == null
+                            || existing.getGeometry().distance(location) > ON_LINE_TOLERANCE_M) {
                         continue;
                     }
-                    if (existing.getGeometry().distance(
-                            chamber.geometry().getFactory().createPoint(location))
-                            <= ON_LINE_TOLERANCE_M) {
-                        hostDn = Math.max(hostDn, existing.getDiameter());
-                        hostCount = 2;      // линия проходит через камеру и делится ею
-                        break;
-                    }
+                    // Учитываются все существующие линии под камерой, а не первая найденная:
+                    // диаметр камеры задаёт самая толстая из них, а примыкание занимает
+                    // каждая. Остановка на первой занижала бы и то, и другое.
+                    hostDn = Math.max(hostDn, existing.getDiameter());
+                    hostCount += splitsLine(existing.getGeometry(), location) ? 2 : 1;
                 }
             }
 
@@ -333,6 +333,22 @@ public class ComplianceChecker {
                     () -> String.format("стоимость %.0f, по шкале для ДУ %d ожидается %.0f",
                             actualCost, declared, expectedCost));
         }
+    }
+
+    /**
+     * Делит ли камера существующую линию на две части. Линия, проходящая через камеру,
+     * занимает два примыкания из четырёх (раздел 2.1, разъяснение №12), а линия, которая
+     * в камере заканчивается, — одно, и тогда новых участков к камере подходит на один
+     * больше.
+     */
+    private boolean splitsLine(Geometry line, Point at) {
+        Coordinate[] cs = line.getCoordinates();
+        if (cs.length == 0) {
+            return false;
+        }
+        Coordinate location = at.getCoordinate();
+        return location.distance(cs[0]) > ON_LINE_TOLERANCE_M
+                && location.distance(cs[cs.length - 1]) > ON_LINE_TOLERANCE_M;
     }
 
     /**

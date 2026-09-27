@@ -1,6 +1,16 @@
-import type { Job, Variant } from '../api/types'
+import { useState } from 'react'
+import { api } from '../api/client'
+import type { Job, SensitivityReport, Variant } from '../api/types'
 import { duration, meters, moneyShort, money, plural, score } from '../lib/format'
 import { Badge, Button, Empty, Progress, Row, Section } from './ui'
+
+/**
+ * Сколько точек подключения проверяет анализ чувствительности из интерфейса.
+ * Один прогон — это полный пересчёт задачи, около двадцати секунд; по всем
+ * семнадцати точкам вышло бы минут пять, и столько никто перед экраном не ждёт.
+ * Точки идут от самой тяжёлой по расходу, поэтому первые три — самые интересные.
+ */
+const SENSITIVITY_POINTS = 3
 
 interface Props {
   job: Job | null
@@ -22,6 +32,22 @@ interface Props {
 export function VariantsPanel({
   job, activeVariant, onSelectVariant, onExport, onExportStatement,
 }: Props) {
+  const [sensitivity, setSensitivity] = useState<SensitivityReport | null>(null)
+  const [sensitivityRunning, setSensitivityRunning] = useState(false)
+  const [sensitivityError, setSensitivityError] = useState<string | null>(null)
+
+  async function runSensitivity(jobId: string) {
+    setSensitivityRunning(true)
+    setSensitivityError(null)
+    try {
+      setSensitivity(await api.sensitivity(jobId, SENSITIVITY_POINTS))
+    } catch (error) {
+      setSensitivityError(error instanceof Error ? error.message : String(error))
+    } finally {
+      setSensitivityRunning(false)
+    }
+  }
+
   if (!job) {
     return (
       <Section title="Варианты подключения">
@@ -141,8 +167,72 @@ export function VariantsPanel({
           {job.stats.tieInCandidates != null && (
             <Row label="Кандидатов мест присоединения" value={job.stats.tieInCandidates} mono />
           )}
+          {job.stats.sharpTurns != null && (
+            <Row
+              label="Поворотов круче предела"
+              value={job.stats.sharpTurns}
+              mono
+              accent={job.stats.sharpTurns > 0}
+            />
+          )}
+          {job.stats.verifiedMoves != null && (
+            <Row
+              label="Проверено ходов без улучшения"
+              value={job.stats.verifiedMoves.toLocaleString('ru-RU')}
+              mono
+            />
+          )}
         </Section>
       )}
+
+      <Section
+        title="Что держит цену"
+        hint={`Задача решается заново без каждой точки подключения. `
+          + `Проверяются ${SENSITIVITY_POINTS} самые тяжёлые точки, это около минуты`}
+        stackRight
+        right={(
+          <Button
+            variant="ghost"
+            disabled={sensitivityRunning}
+            onClick={() => void runSensitivity(job.id)}
+          >
+            {sensitivityRunning ? 'Считаю…' : 'Посчитать'}
+          </Button>
+        )}
+      >
+        {sensitivityError && (
+          <p className="text-[12.5px] text-alert">{sensitivityError}</p>
+        )}
+        {!sensitivityError && !sensitivity && (
+          <Empty>
+            Вклад точки — это не длина отвода к ней. Убрав точку, расчёт
+            перестраивает дерево целиком, и разница выходит другой.
+          </Empty>
+        )}
+        {sensitivity && (
+          <div className="space-y-1.5">
+            {sensitivity.points.map((row) => (
+              <div key={row.objectId} className="border-t border-edge/60 pt-1.5 first:border-0">
+                <Row
+                  label={`Без точки ${row.objectId}`}
+                  value={`дешевле на ${moneyShort(row.costContribution)}`}
+                  mono
+                  accent
+                />
+                <p className="text-[11.5px] leading-snug text-muted">
+                  {`Сеть короче на ${meters(row.lengthContribution)}, `}
+                  {`показатель падает до ${score(row.score)}`}
+                </p>
+              </div>
+            ))}
+            <p className="pt-1 text-[11.5px] leading-snug text-muted">
+              {`${plural(sensitivity.runs, 'прогон', 'прогона', 'прогонов')} `}
+              {`за ${duration(sensitivity.millis)}. Исходный показатель `}
+              {`${score(sensitivity.baseScore)}`}
+            </p>
+          </div>
+        )}
+      </Section>
     </>
   )
 }

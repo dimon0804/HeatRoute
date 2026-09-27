@@ -33,27 +33,27 @@ public class ReferenceProperties {
     @Valid
     private List<ChamberCostRow> chamberCostScale;
 
-    /** Раздел 8.2: стоимость одной независимой врезки, руб. */
+    /** Раздел 3.2: стоимость одной врезки в существующую тепловую камеру, руб. */
     @Positive
     private long tieInCost = 5_000_000L;
 
-    /** Раздел 8.3: фиксированная часть штрафа за неподключенный ОКС, руб. */
+    /** Раздел 6: фиксированная часть штрафа за неподключённую точку подключения, руб. */
     private double unconnectedPenaltyFixed = 100_000_000d;
 
-    /** Раздел 8.3: переменная часть штрафа, руб. за 1 т/ч расчётного расхода ОКС. */
+    /** Раздел 6: переменная часть штрафа, руб. за 1 т/ч расчётного расхода точки. */
     private double unconnectedPenaltyPerTph = 500_000d;
 
-    /** Раздел 9: веса и базы приведения показателя ранжирования. */
+    /** Раздел 6: веса и базы приведения показателя ранжирования. */
     @Valid
     private Scoring scoring = new Scoring();
 
-    /** Раздел 8.2: радиус «притягивания» точки врезки к существующей камере, м. */
+    /** Раздел 2.4: радиус «притягивания» места присоединения к существующей камере, м. */
     private double chamberSnapRadius = 10.0;
 
-    /** Раздел 3: предельное число участков, примыкающих к одной тепловой камере. */
+    /** Раздел 2.1: предельное число участков, примыкающих к одной тепловой камере. */
     private int maxChamberDegree = 4;
 
-    /** Раздел 6 приложения по глубине. */
+    /** Раздел 5 приложения: трассировка с учётом глубины. */
     @Valid
     private Depth depth = new Depth();
 
@@ -92,7 +92,7 @@ public class ReferenceProperties {
         private double pairHeight;
     }
 
-    /** Строка шкалы стоимости камеры (таблица 8.2). */
+    /** Строка шкалы стоимости камеры (раздел 3.2). */
     @Data
     public static class ChamberCostRow {
         private int dnFrom;
@@ -100,7 +100,7 @@ public class ReferenceProperties {
         private double cost;
     }
 
-    /** Раздел 9: параметры показателя ранжирования. */
+    /** Раздел 6: параметры показателя ранжирования. */
     @Data
     public static class Scoring {
         private double costWeight = 0.7;
@@ -126,7 +126,6 @@ public class ReferenceProperties {
         private double freeDepthThreshold = 3.0;
         private double costPerExtraMeter = 0.10;
         private double maxSlope = 0.10;
-        private double crossingFlatLength = 4.0;
         private double crossingFlatHalf = 2.0;
     }
 

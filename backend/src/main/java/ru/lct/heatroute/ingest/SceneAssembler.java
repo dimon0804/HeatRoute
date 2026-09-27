@@ -105,50 +105,6 @@ public class SceneAssembler {
     }
 
     public InputScene assemble(Collector c) {
-        return assemble(c, null, null);
-    }
-
-    /**
-     * Разбор с допущением о загрузке существующей сети, заданным на один расчёт.
-     * <p>
-     * Расхода существующих участков в конкурсном наборе нет, и принятое значение —
-     * самое влиятельное допущение всего решения: от него зависит, какие участки
-     * влияет только на исследовательский режим. Поэтому его должно быть можно менять,
-     * конфигурацию сервиса: посчитать при нулевом расходе и при половине пропускной
-     * не пересобирая сервис.
-     *
-     * @param mode     режим или {@code null}, чтобы взять из конфигурации
-     * @param fraction доля пропускной способности или {@code null} — из конфигурации
-     */
-    public InputScene assemble(Collector c, IngestProperties.ExistingFlowMode mode,
-                               Double fraction) {
-        // Допущение передаётся параметром, а не подменой настроек сервиса: расчёты
-        // идут в несколько потоков, и подмена общего бина означала бы, что два
-        // одновременных расчёта разберут набор с чужими допущениями.
-        return assembleWith(c, new ExistingFlowAssumption(
-                mode != null ? mode : props.getExistingFlowMode(),
-                fraction != null ? fraction : props.getExistingFlowCapacityFraction()));
-    }
-
-    /** Допущение о расходе существующей сети, действующее на один разбор. */
-    private static final class ExistingFlowAssumption {
-        private final IngestProperties.ExistingFlowMode mode;
-        private final double fraction;
-
-        private ExistingFlowAssumption(IngestProperties.ExistingFlowMode mode, double fraction) {
-            this.mode = mode;
-            this.fraction = fraction;
-        }
-
-        private String describe() {
-            return mode == IngestProperties.ExistingFlowMode.ZERO
-                    ? "существующий расход равен нулю"
-                    : String.format("существующий расход равен %.0f%% пропускной способности ДУ",
-                    fraction * 100);
-        }
-    }
-
-    private InputScene assembleWith(Collector c, ExistingFlowAssumption assumption) {
         IngestDiagnostics diag = new IngestDiagnostics();
         catalog.resetUnknownTypes();
         diag.info("input.read", String.format(
@@ -164,7 +120,7 @@ public class SceneAssembler {
         }
 
         HeatSource source = buildSource(c, diag);
-        List<ExistingSegment> segments = buildSegments(c, diag, assumption);
+        List<ExistingSegment> segments = buildSegments(c, diag);
         List<ExistingChamber> chambers = buildChambers(c, diag);
 
         ExistingTopology topology = topologyResolver.resolve(segments, chambers, source, diag);
@@ -231,8 +187,7 @@ public class SceneAssembler {
     //  Существующая сеть
     // =================================================================================
 
-    private List<ExistingSegment> buildSegments(Collector c, IngestDiagnostics diag,
-                                               ExistingFlowAssumption assumption) {
+    private List<ExistingSegment> buildSegments(Collector c, IngestDiagnostics diag) {
         List<ExistingSegment> out = new ArrayList<>(c.networks.size());
         List<String> noFlow = new ArrayList<>();
         List<String> noDiameter = new ArrayList<>();
@@ -255,14 +210,12 @@ public class SceneAssembler {
                 nonTableDn.add(id + ":" + dn);
             }
 
-            Optional<Double> flow = f.num("flow_tph");
-            boolean assumed = flow.isEmpty();
-            double flowValue;
-            if (flow.isPresent()) {
-                flowValue = flow.get();
-            } else {
+            // Расход существующего участка в расчётной модели не участвует: с отменой
+            // реконструкции резерв существующей сети по разделу 2.4 не определяется.
+            // Отсутствие атрибута всё равно попадает в протокол — проверяющий должен
+            // видеть, чего в наборе не было, а не только то, что сервис использовал.
+            if (f.num("flow_tph").isEmpty()) {
                 noFlow.add(id);
-                flowValue = assumedExistingFlow(dn, assumption);
             }
 
             for (int i = 0; i < parts.size(); i++) {
@@ -274,8 +227,6 @@ public class SceneAssembler {
                         .id(partId)
                         .geometry(parts.get(i))
                         .diameter(dn)
-                        .flowTph(flowValue)
-                        .flowAssumed(assumed)
                         .upstreamObjectId(f.str("upstream_object_id"))
                         .upstreamInferred(false)
                         .build());
@@ -294,18 +245,11 @@ public class SceneAssembler {
         }
         if (!noFlow.isEmpty()) {
             diag.assumption("segment.noFlow", String.format(
-                    "У %d участков существующей сети нет атрибута flow_tph. Принят режим %s: "
-                            + "%s. В обязательном расчёте это значение не используется: резерв существующей сети по разделу 2.4 приложения не определяется",
-                    noFlow.size(), assumption.mode, assumption.describe()), noFlow);
+                    "У %d участков существующей сети нет атрибута flow_tph. На расчёт это "
+                            + "не влияет: резерв пропускной способности существующей сети "
+                            + "по разделу 2.4 приложения не определяется", noFlow.size()), noFlow);
         }
         return out;
-    }
-
-    private double assumedExistingFlow(int dn, ExistingFlowAssumption assumption) {
-        if (assumption.mode == IngestProperties.ExistingFlowMode.CAPACITY_FRACTION) {
-            return catalog.byDnOrNextUp(dn).getCapacityTph() * assumption.fraction;
-        }
-        return 0d;
     }
 
     private List<ExistingChamber> buildChambers(Collector c, IngestDiagnostics diag) {
@@ -368,7 +312,7 @@ public class SceneAssembler {
             int dn = ch.getDiameter();
             boolean inferred = false;
             if (dn <= 0) {
-                // Раздел 8.2: исходный условный диаметр камеры — максимальный ДУ уже
+                // Раздел 3.2: условный диаметр камеры — максимальный ДУ уже
                 // примыкающих к ней участков. Ровно это и восстанавливается по графу.
                 Integer idx = topology.getChamberNode().get(ch.getId());
                 if (idx != null) {
